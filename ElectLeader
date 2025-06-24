@@ -1,0 +1,142 @@
+// Most abstracted version of the Elect Leader Protocol.
+// Adapted from 'Protocol Design' chapter, in the Practical Alloy online text book, written by Alcino Cunha, Nuno Macedo, Julien Brunel and David Chemouil. 
+
+// used to tell a Node how to treat a message
+abstract sig Type {}
+
+// Two types of message, Candiate which should be processed and forwarded, or Elect which informs who has been elected.
+one sig Candidate, Elect extends Type {}
+
+// Each node should have a succesor in the ring, as well as a pointer to the Node with the next greatest ID.
+// The inbox is a set of binary relations mapping a message type to its Node payload.
+sig Node {
+	succ : one Node,
+	next : lone Node,
+	var inbox : Type -> Node
+}
+
+// used to determine the smallest (first) and largest (last) IDs in the ring
+one sig first, last in Node {}
+
+// ensures that the ring has a comparable order
+fact ordering {
+  no next.first and no last.next
+  Node-first in first.^next
+}
+
+// structure must form closed ring
+fact ring {
+  all n : Node | Node in n.^succ
+}
+
+// at least one Node should be generated
+fact some_node {
+  some Node
+}
+
+// all inboxes should be empty at initialisation
+fact init {
+  no inbox
+}
+
+// conditions for a node to initiate the protocol
+pred initiate [n : Node] {
+	historically Candidate->n not in n.succ.inbox
+
+	inbox' = inbox + n.succ->Candidate->n
+}
+
+// how nodes will handle elected messages
+pred processElected [n : Node, i : Node] {
+	Elect->i in n.inbox
+
+	inbox' = inbox - n->Elect->i + n.succ->Elect->(i-n)
+}
+
+// how Nodes will handle candiate messages
+pred processCandidate [n : Node, i : Node] {
+
+	Candidate->i in n.inbox
+
+	inbox' = inbox - n->Candidate->i + n.succ->Candidate->(i & n.^next) + n.succ->Elect->(i & n)
+}
+
+// this will fill a set of ordered pairs of Nodes such that the first acknowledges the latter as leader.
+fun Elected : Node -> Node {
+	{n, i : Node | once (before Elect->i in n.inbox and Elect->i not in n.inbox)}
+}
+
+// nothing happens 
+pred stutter {
+  inbox' = inbox
+}
+
+// makes an action happen
+pred node_acts [n : Node] {
+	initiate[n] or
+	(some m : Node | processCandidate[n,m]) or
+	(some m : Node | processElected[n,m])
+}
+
+// ensures the system either stutters or acts
+fact events {
+	always (stutter or some n : Node | node_acts[n])
+}
+
+// fairness conditions
+pred initiate_enabled [n : Node] {
+  historically Candidate->n not in n.succ.inbox
+}
+pred processCandidate_enabled [n : Node, i : Node] {
+  Candidate->i in n.inbox
+}
+pred processElected_enabled [n : Node, i : Node] {
+  Elect->i in n.inbox
+}
+
+pred node_enabled [n : Node] {
+  initiate_enabled[n] or
+  (some i : Node | processCandidate_enabled[n, i]) or
+  (some i : Node | processElected_enabled[n, i])
+}
+
+pred fairness {
+	all n : Node{
+		eventually always node_enabled[n]
+		implies 
+		always eventually node_acts[n]
+	}
+}
+
+
+// spec validillity checks
+
+assert at_most_one_leader {
+ // The set of all destinations of the elected relation should have cardinality of at most 1. 
+ always lone Node.Elected
+}
+
+check at_most_one_leader for 3
+
+assert leader_stays_leader {
+// if a leader is elected, it will always be leader
+	always (all n : Node.Elected | always n in Node.Elected)
+}n
+
+check leader_stays_leader for 3
+
+// Checks that a leader always emerges
+assert at_least_one_leader_fair {
+	fairness implies eventually (Node = Elected.Node)
+}
+
+check at_least_one_leader_fair for 3
+
+
+// run the complete model
+// elimate traces were some nodes remain uninitiated and where a leader is not elected.
+run example{
+	all n : Node | eventually initiate[n]
+	eventually Node = Elected.Node
+} for exactly 3 Node
+
