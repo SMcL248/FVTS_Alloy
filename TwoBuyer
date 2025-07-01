@@ -1,0 +1,209 @@
+abstract sig Participant {
+
+	var inventory : set Book,
+
+	byr1 : one Buyer1,
+	byr2: one Buyer2,
+	sell : one Seller,
+
+	var price_inbox : lone Int,
+	var title_inbox : lone Title,
+	var decision_inbox : lone Decision,
+}
+
+one sig Seller extends Participant {
+	var holding : lone Book
+}
+		
+one sig Buyer1 extends Participant{}
+
+one sig Buyer2 extends Participant{
+	budget : one Int
+}
+
+sig Title {}
+
+sig Book {
+	title : one Title,
+	price : one Int
+}
+
+enum Decision{True, False}
+
+// if a transaction is initiated, this will force it to be completed
+fact order_of_protocol {
+	always (
+		all s : Seller,  b : Book| b.title in s.title_inbox implies (eventually process_title[s,b])
+	)
+	always (
+		all byr : Buyer1, b:Book | b.price in byr.price_inbox implies (eventually process_price_1[byr, b])
+	)
+	always (
+		all byr : Buyer2, p : Int | p in byr.price_inbox implies (eventually process_quote[byr, p]) 
+	)
+	always (
+		all byr : Buyer1, d : Decision | d in byr.decision_inbox implies (eventually process_decision_Buyer1[byr, d])
+	)
+	always(
+		all s : Seller, d : Decision | d in s.decision_inbox implies (eventually process_decision_Seller[s,d])
+	)
+}
+
+// all books should be requested once
+//fact all_books {
+//	(all b : Book, byr : Buyer1| eventually initiate_transsaction[byr, b])
+//}
+
+// all book prices should be positive
+fact positive_prices {
+	all b : Book | gt[b.price, 0]
+}
+
+// all buyer budgets should be positive
+fact positive_budget {
+	all byr : Buyer2 | gt[byr.budget, 0]
+}
+
+// initial conditions
+fact init {
+	all byr1 : Buyer1, byr2 : Buyer2  | no byr1.inventory and no byr2.inventory
+	all s : Seller, b : Book | b in s.inventory
+	all s : Seller | no s.holding
+	all p : Participant | no p.title_inbox and no p.price_inbox and no p.decision_inbox
+}
+
+// no two books can have the same name
+fact no_duplicates {
+	all a : Book, b : Book | b.title = a.title implies b = a
+}
+
+// always at least one book in the system
+fact some_books{
+	some Book
+}
+
+fact events {
+	always (stutter or act)
+}
+
+pred stutter {
+	inventory' = inventory
+	price_inbox' = price_inbox
+	title_inbox' = title_inbox
+	decision_inbox' = decision_inbox 
+	holding' = holding
+}
+
+pred act {
+	(some b:Book, byr:Buyer1 | initiate_transaction[byr, b]) or 
+	(some s : Seller, b : Book | process_title[s,b]) or
+	(some b:Book, byr:Buyer1 | process_price_1[byr, b]) or
+	(some p : Int, byr:Buyer2 | process_quote[byr, p]) or
+	(some byr: Buyer1, d : Decision | process_decision_Buyer1[byr, d]) or
+	(some s : Seller, d : Decision | process_decision_Seller[s,d])	 
+}
+
+// buyer1 should start a transaction by sending a book title to the seller
+pred initiate_transaction [byr : Buyer1, b : Book] {
+	
+	//guard
+	b in byr.sell.inventory and historically b.title not in byr.sell.title_inbox and no byr.sell.title_inbox
+
+	title_inbox' = title_inbox + byr.sell->b.title
+
+	inventory' = inventory
+	price_inbox' = price_inbox
+	decision_inbox' = decision_inbox 
+	holding' = holding
+}
+
+// how the seller should process a book request
+pred process_title [s : Seller, b : Book] {
+
+	b.title in s.title_inbox and no s.byr1.price_inbox //guard
+
+	title_inbox' = title_inbox - s->b.title
+	holding' = holding + s->b
+	price_inbox' = price_inbox  + s.byr1->b.price
+
+	inventory' = inventory
+	decision_inbox' = decision_inbox
+}	
+
+// how a buyer1 should process a book price
+pred process_price_1 [byr : Buyer1, b : Book] {
+
+	b.price in byr.price_inbox and no byr.byr2.price_inbox //guard
+
+	some quote : Int {
+		gt[quote, 0] and lte[quote, b.price]
+		price_inbox' = price_inbox - byr->b.price +  byr.byr2->quote
+	}
+
+	holding' = holding
+	title_inbox' = title_inbox
+	inventory' = inventory
+	decision_inbox' = decision_inbox 
+
+}
+
+// how buyer2 should process a quote
+pred process_quote [byr : Buyer2, p : Int] {
+
+	p in byr.price_inbox and no byr.byr1.decision_inbox //guard
+
+	price_inbox' = price_inbox - byr->p
+	
+	lte[p, byr.budget] implies 
+		decision_inbox' = decision_inbox + byr.byr1->True 
+	else 
+		decision_inbox' = decision_inbox + byr.byr1->False
+
+	holding' = holding
+	title_inbox' = title_inbox
+	inventory' = inventory
+}
+
+
+// how a seller should act upon recieving a transaction decision
+pred process_decision_Buyer1 [byr : Buyer1, d : Decision] {
+
+	d in byr.decision_inbox and no byr.sell.decision_inbox//guard
+
+	decision_inbox' = decision_inbox - byr->d + byr.sell->d
+
+	price_inbox' = price_inbox
+	holding' = holding
+	title_inbox' = title_inbox
+	inventory' = inventory
+}
+
+// how a seller should act upon recieving a transaction decision
+pred process_decision_Seller [s: Seller, d : Decision] {
+
+	d in s.decision_inbox //guard
+
+	decision_inbox' = decision_inbox - s->d
+
+	(d = True) implies
+		(inventory' = inventory - s->s.holding + s.byr1->s.holding + s.byr2->s.holding)
+	else
+		(inventory' = inventory)
+
+	holding' = holding - holding
+	title_inbox' = title_inbox	
+	price_inbox' = price_inbox
+}
+
+// check that if a transaction is initated, it is completed
+assert iniate_transaction_implies_completed {
+	(all byr : Buyer1, b : Book | initiate_transaction[byr, b]) implies eventually once (some s : Seller | before some s.decision_inbox and no s.decision_inbox)
+}
+
+run  {} for 20 steps
+
+
+
+
+
+
