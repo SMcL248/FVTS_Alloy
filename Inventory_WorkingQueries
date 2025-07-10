@@ -1,0 +1,242 @@
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~STANDARD DATA TYPES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Abstract response type to allow for various payloads
+abstract sig Response {}
+
+abstract sig Id {}
+
+one sig Null extends Id {}
+
+sig Identifier extends Id {}
+
+sig Query {
+	body : HTTP -> ResponseType -> Id,
+}
+
+enum HTTP {
+	GET,
+	POST,
+	PATCH,
+	DELETE,
+	PUT
+}
+
+enum ResponseCode {
+	_200_OK,
+	_201_CREATED,
+	_204_DELETED,
+	_400_BAD_REQUEST,
+	_401_UNAUTHORIZED,
+	_403_FORBIDDEN,
+	_404_NOT_FOUND,
+	_405_METHOD_NOT_ALLOWED,
+	_413_PAYLOAD_TOO_LARGE,
+	_414_URI_TOO_LONG,
+	_422_UNPROCESSABLE_ENTITY,
+	_429_TOO_MANY_REQUESTS,
+	_500_INTERNAL_SERVER_ERROR,
+	_503_SERVICE_UNAVAILABLE,
+	_504_GATEWAY_TIMEOUT
+}
+
+sig ProblemDetails extends Response {
+	status : one ResponseCode
+}
+
+one sig ValidQueries {
+	supported : set Query
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~RELEVANT ENUMERATED VALUES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+enum ClearingType {
+	automatic,
+	manual
+}
+
+enum ManagementInterfaceId {
+	O2IMS
+}
+
+enum ResourceKind {
+	UNDEFINED_KIND,
+	PHYSICAL,
+	LOGICAL
+}
+
+enum ResourceClass {
+	UNDEFINED_CLASS,
+	COMPUTE,
+	NETWORKING,
+	STORAGE
+}
+
+enum AlarmChangeType{
+	added,
+	deleted,
+	modified
+}
+
+// Each thing we can query.
+enum ResponseType {
+	Type,
+	Resource,
+	Pool,
+	oCloud,
+	AlarmDictionaryInfo,
+	PerformanceDictionaryInfo,
+	DeploymentManager,
+	InventorySubscription
+}
+
+	
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~INVENTORY DATA TYPES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+sig ResourceTypeInfo extends Response{
+	resourceTypeId : one Identifier,
+	resourceKind : one ResourceKind,
+	resourceClass : one ResourceClass,
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~PREDICATES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	query_inbox' = query_inbox
+	response_inbox' = response_inbox
+}
+
+pred act {
+	some q : Query | send_query[q] or process_query[q]
+}
+
+pred send_query [q : Query] {
+	query_inbox' = query_inbox + IMS->q
+	response_inbox' = response_inbox
+}
+
+pred process_query [q : Query] {
+
+	 q in IMS.query_inbox //guard
+
+	query_inbox' = query_inbox - IMS->q
+
+	q in ValidQueries.supported implies
+		(get_type_list[q]
+		or get_type[q]
+		)
+	else (
+		invalid_method
+	)
+}
+
+pred get_type_list [q: Query] {
+
+	q.body= GET->Type->Null //guard
+
+	response_inbox' = response_inbox + SMO->GET_ResourceTypeList
+}
+
+pred get_type [q : Query] {
+
+	q.body in GET->Type->Identifier // guard
+
+	response_inbox' = response_inbox + SMO->GET_ResourceType[extract_id[q]]
+}
+
+pred invalid_method  {
+	some pd : ProblemDetails | 
+		pd.status = _405_METHOD_NOT_ALLOWED and response_inbox' = response_inbox + SMO->pd->_405_METHOD_NOT_ALLOWED
+}
+
+
+
+pred clear_response_inbox {
+	response_inbox' = response_inbox - response_inbox
+	query_inbox' = query_inbox
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~FACTS~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact stutter_or_act {
+	always (stutter or act)
+}
+
+fact load_valid_queries {
+	all q : Query | 
+		(q.body in GET->Type->Id) implies 
+			q in ValidQueries.supported
+		else 	
+			q not in ValidQueries.supported
+}
+
+fact identifiers_must_be_unique {
+	all disj a, b : ResourceTypeInfo | a.resourceTypeId != b.resourceTypeId
+}
+
+fact query_one_payload {
+	all q : Query | one q.body
+}
+
+fact init {
+	no IMS.query_inbox and no SMO.response_inbox
+}
+
+fact exists_valid_query {
+	some ValidQueries.supported
+}
+
+fact ProblemDetails_generator {
+	all rc : ResponseCode | some pd : ProblemDetails | pd.status = rc
+}
+
+fact queries_must_be_processed {
+	eventually (some q : Query | send_query[q] implies process_query[q])
+}
+
+fact all_queries_at_least_once {
+	eventually (all q : Query | send_query[q])
+}
+
+fact disj_queries {
+	all disj a,b : Query | a.body != b.body
+}
+	
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~FUNCTIONS (HTTP Queries)~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Stutter helper method
+let unchanged[r] { (r') = (r) }	
+
+fun extract_id [q : Query] : one Identifier {
+	{id : Identifier | q.body in HTTP->ResponseType->id}
+}
+
+fun GET_ResourceTypeList : set Response -> ResponseCode {	
+	{ResourceTypeInfo} -> _200_OK
+}
+
+fun GET_ResourceType [id : Identifier] : set Response -> ResponseCode {	
+	
+	(id in ResourceTypeInfo.resourceTypeId) implies
+		{rt : ResourceTypeInfo | rt.resourceTypeId = id} -> _200_OK
+	else 
+		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
+}
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+one sig IMS{
+	var query_inbox : set Query
+}
+
+one sig SMO{
+	var response_inbox : set Response -> ResponseCode,
+	consumerId : one Identifier
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Assertions~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Check & Run ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+run {} for 3 but exactly 15 ProblemDetails, exactly 2 ResourceTypeInfo, 3 Identifier, exactly 2 Query, 50 steps
+
