@@ -82,7 +82,7 @@ enum ResponseType {
 	Type,
 	Resource,
 	Pool,
-//	oCloud,
+	oCloud,
 //	AlarmDictionaryInfo,
 //	PerformanceDictionaryInfo,
 	DeploymentManager
@@ -150,6 +150,7 @@ pred process_query [q : Query] {
 		or get_resource[q]
 		or get_dm_list[q]
 		or get_dm[q]
+		or get_cloud[q]
 		)
 	else (
 		invalid_method
@@ -212,6 +213,13 @@ pred get_dm [q : Query] {
 	response_inbox' = response_inbox + SMO->GET_DM[extract_id[q]]
 }
 
+pred get_cloud [q : Query] {
+
+	q.body in GET->oCloud->Null // guard
+
+	response_inbox' = response_inbox + SMO->GET_Cloud
+}
+
 pred invalid_method  {
 	some pd : ProblemDetails |
 		pd.status = _405_METHOD_NOT_ALLOWED and response_inbox' = response_inbox + SMO->pd->_405_METHOD_NOT_ALLOWED
@@ -239,7 +247,8 @@ fact load_valid_queries {
 		((q.body in GET->Type->Id and no q.extension) or 
 		q.body in GET->Pool->Identifier or 
 		(q.body in GET->Pool->Null and no q.extension) or
-		(q.body in GET->DeploymentManager->Id and no q.extension) 
+		(q.body in GET->DeploymentManager->Id and no q.extension) or
+		(q.body in GET->oCloud->Null and no q.extension) 
 		)implies 
 			q in ValidQueries.supported
 		else 	
@@ -248,7 +257,7 @@ fact load_valid_queries {
 
 // remove this
 fact test {
-	some q : Query, id : Identifier | q.body = GET->DeploymentManager->id and id in DeploymentManagerInfo.deploymentManagerId
+	some q : Query | q.body = GET->oCloud->Null
 }
 
 fact identifiers_must_be_unique {
@@ -358,20 +367,28 @@ fun GET_Resource [pool_id : Identifier, id : Identifier] : set Response -> Respo
 }
 
 
-// Get the list of all resource types
+// Get the list of all deployment managers
 fun GET_DMList : set Response -> ResponseCode {	
 	{DeploymentManagerInfo} -> _200_OK
 }
 
 
-// Get a type given its id
+// Get a deployment manager given its id
 fun GET_DM [id : Identifier] : set Response -> ResponseCode {	
 	
 	(id in DeploymentManagerInfo.deploymentManagerId) implies
 		{dm : DeploymentManagerInfo | dm.deploymentManagerId = id} -> _200_OK
 	else 
 		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
+
 }
+
+// Get the O-Cloud
+fun GET_Cloud : set Response -> ResponseCode {	
+	{OCloudInfo} -> _200_OK
+}
+
+
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
