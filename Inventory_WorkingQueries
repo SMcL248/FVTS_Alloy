@@ -81,11 +81,11 @@ enum AlarmChangeType{
 enum ResponseType {
 	Type,
 	Resource,
-	Pool
+	Pool,
 //	oCloud,
 //	AlarmDictionaryInfo,
 //	PerformanceDictionaryInfo,
-//	DeploymentManager,
+	DeploymentManager
 //	InventorySubscription
 }
 
@@ -107,6 +107,16 @@ sig ResourceInfo extends Response {
 	resourcePoolId : one Identifier,
 	resourceTypeId : one Identifier,
 	elements : set ResourceInfo
+}
+
+sig DeploymentManagerInfo extends Response {
+	deploymentManagerId : one Identifier,
+	oCloudid : one Identifier
+}
+
+one sig OCloudInfo extends Response {
+	oCloud : one Identifier,
+	globalcloudId : one Identifier
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~PREDICATES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -138,6 +148,8 @@ pred process_query [q : Query] {
 		or get_pool[q]
 		or get_resource_list[q]
 		or get_resource[q]
+		or get_dm_list[q]
+		or get_dm[q]
 		)
 	else (
 		invalid_method
@@ -186,10 +198,25 @@ pred get_resource [q : Query] {
 	response_inbox' = response_inbox + SMO->GET_Resource[extract_id[q], extract_extension_id[q]]
 }
 
+pred get_dm_list [q: Query] {
+
+	q.body= GET->DeploymentManager->Null //guard
+
+	response_inbox' = response_inbox + SMO->GET_DMList
+}
+
+pred get_dm [q : Query] {
+
+	q.body in GET->DeploymentManager->Identifier // guard
+
+	response_inbox' = response_inbox + SMO->GET_DM[extract_id[q]]
+}
+
 pred invalid_method  {
 	some pd : ProblemDetails |
 		pd.status = _405_METHOD_NOT_ALLOWED and response_inbox' = response_inbox + SMO->pd->_405_METHOD_NOT_ALLOWED
 }
+
 
 pred clear_response_inbox {
 	response_inbox' = response_inbox - response_inbox
@@ -211,21 +238,29 @@ fact load_valid_queries {
 	all q : Query | 
 		((q.body in GET->Type->Id and no q.extension) or 
 		q.body in GET->Pool->Identifier or 
-		(q.body in GET->Pool->Null and no q.extension) 
+		(q.body in GET->Pool->Null and no q.extension) or
+		(q.body in GET->DeploymentManager->Id and no q.extension) 
 		)implies 
 			q in ValidQueries.supported
 		else 	
 			q not in ValidQueries.supported
 }
 
+// remove this
+fact test {
+	some q : Query, id : Identifier | q.body = GET->DeploymentManager->id and id in DeploymentManagerInfo.deploymentManagerId
+}
+
 fact identifiers_must_be_unique {
 	all disj a, b : ResourceTypeInfo | a.resourceTypeId != b.resourceTypeId
 	all disj a, b : ResourcePoolInfo | a.resourcePoolId != b.resourcePoolId
 	all disj a, b : ResourceInfo | a.resourceId != b.resourceId
+	all disj a,b : DeploymentManagerInfo | a.deploymentManagerId != b.deploymentManagerId
 }
 
 fact ids_link_to_resources {
 	all r : ResourceInfo | r.resourcePoolId in ResourcePoolInfo.resourcePoolId and r.resourceTypeId in ResourceTypeInfo.resourceTypeId
+	all dm : DeploymentManagerInfo | dm.oCloudid in OCloudInfo.oCloud
 }
 
 fact query_one_payload {
@@ -322,6 +357,22 @@ fun GET_Resource [pool_id : Identifier, id : Identifier] : set Response -> Respo
 		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
 }
 
+
+// Get the list of all resource types
+fun GET_DMList : set Response -> ResponseCode {	
+	{DeploymentManagerInfo} -> _200_OK
+}
+
+
+// Get a type given its id
+fun GET_DM [id : Identifier] : set Response -> ResponseCode {	
+	
+	(id in DeploymentManagerInfo.deploymentManagerId) implies
+		{dm : DeploymentManagerInfo | dm.deploymentManagerId = id} -> _200_OK
+	else 
+		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
+}
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 one sig IMS{
@@ -338,5 +389,5 @@ one sig SMO{
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Check & Run ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-run {} for 3 but exactly 15 ProblemDetails, exactly 6 ResourceInfo, exactly 3 ResourceTypeInfo, exactly 2 ResourcePoolInfo, exactly 6 Identifier, exactly 1 Query, 50 steps
+run {} for 3 but exactly 15 ProblemDetails, exactly 6 ResourceInfo, exactly 3 ResourceTypeInfo, exactly 2 ResourcePoolInfo, exactly 1 DeploymentManagerInfo, exactly 6 Identifier, exactly 1 Query, 50 steps
 
