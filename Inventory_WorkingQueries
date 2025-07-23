@@ -85,8 +85,8 @@ enum ResponseType {
 	Resource,
 	Pool,
 	oCloud,
-//	AlarmDictionaryInfo,
-//	PerformanceDictionaryInfo,
+	AlarmDic,
+//	PerformanceDictionary,
 	DeploymentManager,
 	InventorySubscription
 }
@@ -126,6 +126,25 @@ sig InventorySubscriptionInfo extends Response{
 	var consumerSubscriptionId : lone Identifier
 }
 
+sig AlarmDictionary extends Response{
+	alarmDictionaryId : one Identifier,
+	managementInterfaceId : one ManagementInterfaceId,
+	alarmDefinition : set AlarmDefinition,
+	probableCauses : set ProbableCause
+}
+
+sig AlarmDefinition extends Response {
+	alarmChangeType : one AlarmChangeType,
+	clearingType : one ClearingType,
+	managementInterfaceId : set ManagementInterfaceId,
+}
+
+sig ProbableCause extends Response{
+	standardReference : lone StandardReference
+}
+
+sig StandardReference {}
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~PREDICATES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 pred stutter {
@@ -164,6 +183,8 @@ pred process_query [q : Query] {
 		or get_is[q]
 		or post_is[q]	
 		or delete_is[q]
+		or get_ad_list[q]
+		or get_ad[q]
 		)
 	else (
 		invalid_method
@@ -293,6 +314,22 @@ pred delete_is [q : Query] {
 		some pd : ProblemDetails | pd.status = _404_NOT_FOUND and response_inbox' = response_inbox + SMO->pd->_404_NOT_FOUND
 }
 
+pred get_ad_list [q : Query] {
+	q.body in GET->AlarmDic->Null //guard
+
+	response_inbox' = response_inbox + SMO->GET_AlarmDictionaryList
+
+	consumerSubscriptionId' = consumerSubscriptionId
+}
+
+pred get_ad [q : Query] {
+	q.body in GET->AlarmDic->Identifier //guard
+
+	response_inbox' = response_inbox + SMO->GET_AlarmDictionary[extract_id[q]]
+
+	consumerSubscriptionId' = consumerSubscriptionId
+}
+
 pred invalid_method  {
 	some pd : ProblemDetails |
 		pd.status = _405_METHOD_NOT_ALLOWED and response_inbox' = response_inbox + SMO->pd->_405_METHOD_NOT_ALLOWED
@@ -328,17 +365,17 @@ fact load_valid_queries {
 		(q.body in GET->oCloud->Null and no q.extension) or
 		(q.body in GET->InventorySubscription->Id and no q.extension) or
 		(q.body in POST->InventorySubscription->Identifier and no q.extension) or 
-		(q.body in DELETE->InventorySubscription->Identifier and no q.extension)
+		(q.body in DELETE->InventorySubscription->Identifier and no q.extension) or
+		(q.body in GET->AlarmDic->Id and no q.extension)
 		)implies 
 			q in ValidQueries.supported
 		else 	
 			q not in ValidQueries.supported
 }
 
-// remove this
+// Used to test new funcitonallity (Delete)
 fact test {
-	some q : Query, id : Identifier | q.body in POST->InventorySubscription->id and id in InventorySubscriptionInfo.subscriptionId
-	some q : Query, id : Identifier | q.body in DELETE->InventorySubscription->id and id in InventorySubscriptionInfo.subscriptionId
+	some q : Query | q.body in GET->AlarmDic->Null
 }
 
 fact identifiers_must_be_unique {
@@ -347,6 +384,7 @@ fact identifiers_must_be_unique {
 	all disj a, b : ResourceInfo | a.resourceId != b.resourceId
 	all disj a,b : DeploymentManagerInfo | a.deploymentManagerId != b.deploymentManagerId
 	all disj a,b  : InventorySubscriptionInfo | a.subscriptionId != b.subscriptionId 
+	all disj a,b : AlarmDictionary | a.alarmDictionaryId != b.alarmDictionaryId
 }
 
 fact ids_link_to_resources {
@@ -484,6 +522,19 @@ fun GET_IS [id : Identifier] : set Response -> ResponseCode {
 		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
 }
 
+// Get list of all AlarmDictionaries
+fun GET_AlarmDictionaryList : set Response -> ResponseCode {
+	{AlarmDictionary} -> _200_OK
+}
+
+// Get a specific AlarmDictionary
+fun GET_AlarmDictionary [id : Identifier] : set Response -> ResponseCode {
+	(id in AlarmDictionary.alarmDictionaryId) implies 
+		{ad :AlarmDictionary | ad.alarmDictionaryId = id } ->_200_OK
+	else
+		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
+}
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 one sig IMS{
@@ -499,5 +550,5 @@ one sig SMO{
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Check & Run ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-run {} for 3 but exactly 15 ProblemDetails, exactly 3 Identifier, exactly 1 InventorySubscriptionInfo, exactly 2 Query, 50 steps
+run {} for 3 but exactly 15 ProblemDetails, exactly 3 Identifier, exactly 3 AlarmDictionary, exactly 1 AlarmDefinition, exactly 1 ProbableCause, exactly 1 Query, 50 steps
 
