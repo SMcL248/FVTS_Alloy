@@ -1,5 +1,7 @@
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~STANDARD DATA TYPES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+// NOTE : Fix POST method for creating new subscriptions
+
 // Abstract response type to allow for various payloads
 abstract sig Response {}
 
@@ -85,8 +87,8 @@ enum ResponseType {
 	oCloud,
 //	AlarmDictionaryInfo,
 //	PerformanceDictionaryInfo,
-	DeploymentManager
-//	InventorySubscription
+	DeploymentManager,
+	InventorySubscription
 }
 
 	
@@ -119,11 +121,17 @@ one sig OCloudInfo extends Response {
 	globalcloudId : one Identifier
 }
 
+sig InventorySubscriptionInfo extends Response{
+	subscriptionId : one Identifier,
+	var consumerSubscriptionId : lone Identifier
+}
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~PREDICATES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 pred stutter {
 	query_inbox' = query_inbox
 	response_inbox' = response_inbox
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred act {
@@ -133,6 +141,7 @@ pred act {
 pred send_query [q : Query] {
 	query_inbox' = query_inbox + IMS->q
 	response_inbox' = response_inbox
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred process_query [q : Query] {
@@ -151,6 +160,10 @@ pred process_query [q : Query] {
 		or get_dm_list[q]
 		or get_dm[q]
 		or get_cloud[q]
+		or get_is_list[q]
+		or get_is[q]
+		or post_is[q]	
+		or delete_is[q]
 		)
 	else (
 		invalid_method
@@ -162,6 +175,8 @@ pred get_type_list [q: Query] {
 	q.body= GET->Type->Null //guard
 
 	response_inbox' = response_inbox + SMO->GET_ResourceTypeList
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred get_type [q : Query] {
@@ -169,6 +184,8 @@ pred get_type [q : Query] {
 	q.body in GET->Type->Identifier // guard
 
 	response_inbox' = response_inbox + SMO->GET_ResourceType[extract_id[q]]
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred get_pool_list [q: Query] {
@@ -176,6 +193,8 @@ pred get_pool_list [q: Query] {
 	q.body= GET->Pool->Null //guard
 
 	response_inbox' = response_inbox + SMO->GET_ResourcePoolList
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred get_pool [q : Query] {
@@ -183,6 +202,8 @@ pred get_pool [q : Query] {
 	q.body in GET->Pool->Identifier and no q.extension // guard
 
 	response_inbox' = response_inbox + SMO->GET_ResourcePool[extract_id[q]]
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred get_resource_list [q : Query] {
@@ -190,6 +211,8 @@ pred get_resource_list [q : Query] {
 	q.body in GET->Pool->Identifier and q.extension in Resource->Null // guard
 
 	response_inbox' = response_inbox + SMO->GET_ResourceList[extract_id[q]]
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred get_resource [q : Query] {
@@ -197,6 +220,8 @@ pred get_resource [q : Query] {
 	q.body in GET->Pool->Identifier and q.extension in Resource->Identifier // guard
 
 	response_inbox' = response_inbox + SMO->GET_Resource[extract_id[q], extract_extension_id[q]]
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred get_dm_list [q: Query] {
@@ -204,6 +229,8 @@ pred get_dm_list [q: Query] {
 	q.body= GET->DeploymentManager->Null //guard
 
 	response_inbox' = response_inbox + SMO->GET_DMList
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred get_dm [q : Query] {
@@ -211,6 +238,8 @@ pred get_dm [q : Query] {
 	q.body in GET->DeploymentManager->Identifier // guard
 
 	response_inbox' = response_inbox + SMO->GET_DM[extract_id[q]]
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 pred get_cloud [q : Query] {
@@ -218,17 +247,65 @@ pred get_cloud [q : Query] {
 	q.body in GET->oCloud->Null // guard
 
 	response_inbox' = response_inbox + SMO->GET_Cloud
+
+	consumerSubscriptionId' = consumerSubscriptionId
+}
+
+pred get_is_list [q: Query] {
+
+	q.body= GET->InventorySubscription->Null //guard
+
+	response_inbox' = response_inbox + SMO->GET_ISList
+
+	consumerSubscriptionId' = consumerSubscriptionId
+}
+
+pred get_is [q : Query] {
+
+	q.body in GET->InventorySubscription->Identifier // guard
+
+	response_inbox' = response_inbox + SMO->GET_IS[extract_id[q]]
+
+	consumerSubscriptionId' = consumerSubscriptionId
+}
+
+pred post_is [q : Query] {
+
+	q.body in POST->InventorySubscription->Identifier //guard
+
+	some is : InventorySubscriptionInfo | is.subscriptionId = extract_id[q] and no is.consumerSubscriptionId implies
+			consumerSubscriptionId' = consumerSubscriptionId + is->SMO.consumerId and
+			response_inbox' = response_inbox + SMO->is->_201_CREATED
+	else
+		consumerSubscriptionId' = consumerSubscriptionId and
+		some pd : ProblemDetails | pd.status = _404_NOT_FOUND and response_inbox' = response_inbox + SMO->pd->_404_NOT_FOUND
+
+}
+
+pred delete_is [q : Query] {
+	q.body in DELETE->InventorySubscription->Identifier //guard
+
+	some is : InventorySubscriptionInfo | is.subscriptionId = extract_id[q] and some is.consumerSubscriptionId implies
+		consumerSubscriptionId' = consumerSubscriptionId - is->SMO.consumerId and
+		response_inbox' = response_inbox + SMO->is->_204_DELETED
+	else
+		consumerSubscriptionId' = consumerSubscriptionId and
+		some pd : ProblemDetails | pd.status = _404_NOT_FOUND and response_inbox' = response_inbox + SMO->pd->_404_NOT_FOUND
 }
 
 pred invalid_method  {
 	some pd : ProblemDetails |
 		pd.status = _405_METHOD_NOT_ALLOWED and response_inbox' = response_inbox + SMO->pd->_405_METHOD_NOT_ALLOWED
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 
 pred clear_response_inbox {
 	response_inbox' = response_inbox - response_inbox
 	query_inbox' = query_inbox
+
+	consumerSubscriptionId' = consumerSubscriptionId
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~FACTS~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -246,9 +323,12 @@ fact load_valid_queries {
 	all q : Query | 
 		((q.body in GET->Type->Id and no q.extension) or 
 		q.body in GET->Pool->Identifier or 
-		(q.body in GET->Pool->Null and no q.extension) or
+		(q.body in GET->Pool->Null and no q.extension) or 
 		(q.body in GET->DeploymentManager->Id and no q.extension) or
-		(q.body in GET->oCloud->Null and no q.extension) 
+		(q.body in GET->oCloud->Null and no q.extension) or
+		(q.body in GET->InventorySubscription->Id and no q.extension) or
+		(q.body in POST->InventorySubscription->Identifier and no q.extension) or 
+		(q.body in DELETE->InventorySubscription->Identifier and no q.extension)
 		)implies 
 			q in ValidQueries.supported
 		else 	
@@ -257,7 +337,8 @@ fact load_valid_queries {
 
 // remove this
 fact test {
-	some q : Query | q.body = GET->oCloud->Null
+	some q : Query, id : Identifier | q.body in POST->InventorySubscription->id and id in InventorySubscriptionInfo.subscriptionId
+	some q : Query, id : Identifier | q.body in DELETE->InventorySubscription->id and id in InventorySubscriptionInfo.subscriptionId
 }
 
 fact identifiers_must_be_unique {
@@ -265,6 +346,7 @@ fact identifiers_must_be_unique {
 	all disj a, b : ResourcePoolInfo | a.resourcePoolId != b.resourcePoolId
 	all disj a, b : ResourceInfo | a.resourceId != b.resourceId
 	all disj a,b : DeploymentManagerInfo | a.deploymentManagerId != b.deploymentManagerId
+	all disj a,b  : InventorySubscriptionInfo | a.subscriptionId != b.subscriptionId 
 }
 
 fact ids_link_to_resources {
@@ -278,6 +360,7 @@ fact query_one_payload {
 
 fact init {
 	no IMS.query_inbox and no SMO.response_inbox
+	all is : InventorySubscriptionInfo | no is.consumerSubscriptionId
 }
 
 // *temporary*
@@ -372,7 +455,6 @@ fun GET_DMList : set Response -> ResponseCode {
 	{DeploymentManagerInfo} -> _200_OK
 }
 
-
 // Get a deployment manager given its id
 fun GET_DM [id : Identifier] : set Response -> ResponseCode {	
 	
@@ -388,14 +470,25 @@ fun GET_Cloud : set Response -> ResponseCode {
 	{OCloudInfo} -> _200_OK
 }
 
+// Get the list of all subscriptions
+fun GET_ISList : set Response -> ResponseCode {	
+	{InventorySubscriptionInfo} -> _200_OK
+}
 
+// Get a subscription given its id
+fun GET_IS [id : Identifier] : set Response -> ResponseCode {	
+	
+	(id in InventorySubscriptionInfo.subscriptionId) implies
+		{is : InventorySubscriptionInfo | is.subscriptionId = id} -> _200_OK
+	else 
+		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
+}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 one sig IMS{
 	var query_inbox : set Query
 }
-
 
 one sig SMO{
 	var response_inbox : set Response -> ResponseCode,
@@ -406,5 +499,5 @@ one sig SMO{
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Check & Run ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-run {} for 3 but exactly 15 ProblemDetails, exactly 6 ResourceInfo, exactly 3 ResourceTypeInfo, exactly 2 ResourcePoolInfo, exactly 1 DeploymentManagerInfo, exactly 6 Identifier, exactly 1 Query, 50 steps
+run {} for 3 but exactly 15 ProblemDetails, exactly 3 Identifier, exactly 1 InventorySubscriptionInfo, exactly 2 Query, 50 steps
 
