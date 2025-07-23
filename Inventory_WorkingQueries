@@ -1,7 +1,5 @@
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~STANDARD DATA TYPES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-// NOTE : Fix POST method for creating new subscriptions
-
 // Abstract response type to allow for various payloads
 abstract sig Response {}
 
@@ -86,7 +84,7 @@ enum ResponseType {
 	Pool,
 	oCloud,
 	AlarmDic,
-//	PerformanceDictionary,
+	PerformanceDic,
 	DeploymentManager,
 	InventorySubscription
 }
@@ -96,8 +94,6 @@ enum ResponseType {
 
 sig ResourceTypeInfo extends Response{
 	resourceTypeId : one Identifier,
-	resourceKind : one ResourceKind,
-	resourceClass : one ResourceClass,
 }
 
 sig ResourcePoolInfo extends Response{
@@ -128,22 +124,29 @@ sig InventorySubscriptionInfo extends Response{
 
 sig AlarmDictionary extends Response{
 	alarmDictionaryId : one Identifier,
-	managementInterfaceId : one ManagementInterfaceId,
 	alarmDefinition : set AlarmDefinition,
 	probableCauses : set ProbableCause
 }
 
-sig AlarmDefinition extends Response {
-	alarmChangeType : one AlarmChangeType,
-	clearingType : one ClearingType,
-	managementInterfaceId : set ManagementInterfaceId,
-}
+sig AlarmDefinition extends Response {}
 
 sig ProbableCause extends Response{
 	standardReference : lone StandardReference
 }
 
 sig StandardReference {}
+
+sig PerformanceDictionary extends Response{
+	performanceDictionaryId : one Identifier,
+	supportedMeasurements : set PerformanceMeasurementDefinition
+}
+
+abstract sig PerformanceMeasurementDefinition extends Response{}
+
+sig _3GPPPerformanceMeasurementDefinition extends PerformanceMeasurementDefinition {}
+
+sig ETSIPerformanceMeasurementDefinition extends PerformanceMeasurementDefinition {}
+
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~PREDICATES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -158,6 +161,7 @@ pred act {
 }
 
 pred send_query [q : Query] {
+	no IMS.query_inbox //guard	
 	query_inbox' = query_inbox + IMS->q
 	response_inbox' = response_inbox
 	consumerSubscriptionId' = consumerSubscriptionId
@@ -185,6 +189,8 @@ pred process_query [q : Query] {
 		or delete_is[q]
 		or get_ad_list[q]
 		or get_ad[q]
+		or get_pd_list[q]
+		or get_pd[q]
 		)
 	else (
 		invalid_method
@@ -249,7 +255,7 @@ pred get_dm_list [q: Query] {
 
 	q.body= GET->DeploymentManager->Null //guard
 
-	response_inbox' = response_inbox + SMO->GET_DMList
+	response_inbox' = response_inbox + SMO->GET_DeploymentManagerList
 
 	consumerSubscriptionId' = consumerSubscriptionId
 }
@@ -258,7 +264,7 @@ pred get_dm [q : Query] {
 
 	q.body in GET->DeploymentManager->Identifier // guard
 
-	response_inbox' = response_inbox + SMO->GET_DM[extract_id[q]]
+	response_inbox' = response_inbox + SMO->GET_DeploymentManager[extract_id[q]]
 
 	consumerSubscriptionId' = consumerSubscriptionId
 }
@@ -276,7 +282,7 @@ pred get_is_list [q: Query] {
 
 	q.body= GET->InventorySubscription->Null //guard
 
-	response_inbox' = response_inbox + SMO->GET_ISList
+	response_inbox' = response_inbox + SMO->GET_InventorySubscriptionList
 
 	consumerSubscriptionId' = consumerSubscriptionId
 }
@@ -285,7 +291,7 @@ pred get_is [q : Query] {
 
 	q.body in GET->InventorySubscription->Identifier // guard
 
-	response_inbox' = response_inbox + SMO->GET_IS[extract_id[q]]
+	response_inbox' = response_inbox + SMO->GET_InventorySubscription[extract_id[q]]
 
 	consumerSubscriptionId' = consumerSubscriptionId
 }
@@ -330,6 +336,25 @@ pred get_ad [q : Query] {
 	consumerSubscriptionId' = consumerSubscriptionId
 }
 
+pred get_pd_list [q :Query] {
+
+	q.body in GET->PerformanceDic->Null //guard
+
+	response_inbox' = response_inbox + SMO->GET_PerformanceDictionaryList
+
+	consumerSubscriptionId' = consumerSubscriptionId
+}
+
+pred get_pd [q : Query] {
+
+	q.body in GET->PerformanceDic->Identifier //guard
+
+	response_inbox' = response_inbox + SMO->GET_PerformanceDictionary[extract_id[q]]
+
+	consumerSubscriptionId' = consumerSubscriptionId
+}
+
+
 pred invalid_method  {
 	some pd : ProblemDetails |
 		pd.status = _405_METHOD_NOT_ALLOWED and response_inbox' = response_inbox + SMO->pd->_405_METHOD_NOT_ALLOWED
@@ -366,7 +391,8 @@ fact load_valid_queries {
 		(q.body in GET->InventorySubscription->Id and no q.extension) or
 		(q.body in POST->InventorySubscription->Identifier and no q.extension) or 
 		(q.body in DELETE->InventorySubscription->Identifier and no q.extension) or
-		(q.body in GET->AlarmDic->Id and no q.extension)
+		(q.body in GET->AlarmDic->Id and no q.extension) or
+		(q.body in GET->PerformanceDic->Id and no q.extension)
 		)implies 
 			q in ValidQueries.supported
 		else 	
@@ -374,9 +400,9 @@ fact load_valid_queries {
 }
 
 // Used to test new funcitonallity (Delete)
-fact test {
-	some q : Query | q.body in GET->AlarmDic->Null
-}
+//fact test {
+//	some q : Query | q.body in GET->PerformanceDic->Null
+//}
 
 fact identifiers_must_be_unique {
 	all disj a, b : ResourceTypeInfo | a.resourceTypeId != b.resourceTypeId
@@ -385,6 +411,7 @@ fact identifiers_must_be_unique {
 	all disj a,b : DeploymentManagerInfo | a.deploymentManagerId != b.deploymentManagerId
 	all disj a,b  : InventorySubscriptionInfo | a.subscriptionId != b.subscriptionId 
 	all disj a,b : AlarmDictionary | a.alarmDictionaryId != b.alarmDictionaryId
+	all disj a,b : PerformanceDictionary | a.performanceDictionaryId != b.performanceDictionaryId
 }
 
 fact ids_link_to_resources {
@@ -410,13 +437,13 @@ fact ProblemDetails_generator {
 	all rc : ResponseCode | some pd : ProblemDetails | pd.status = rc
 }
 
-fact queries_must_be_processed {
-	all q : Query | send_query[q] implies process_query[q]
+fact all_queries_at_least_once {
+	eventually (all q : Query | once send_query[q])
 }
 
-fact all_queries_at_least_once {
-	eventually (all q : Query | send_query[q])
-}
+//fact all_queries_processed {
+//	eventually (all q : Query | before q in IMS.query_inbox and q not in IMS.query_inbox)
+//}
 
 fact disj_queries {
 	all disj a,b : Query | a.body != b.body
@@ -489,12 +516,12 @@ fun GET_Resource [pool_id : Identifier, id : Identifier] : set Response -> Respo
 
 
 // Get the list of all deployment managers
-fun GET_DMList : set Response -> ResponseCode {	
+fun GET_DeploymentManagerList : set Response -> ResponseCode {	
 	{DeploymentManagerInfo} -> _200_OK
 }
 
 // Get a deployment manager given its id
-fun GET_DM [id : Identifier] : set Response -> ResponseCode {	
+fun GET_DeploymentManager [id : Identifier] : set Response -> ResponseCode {	
 	
 	(id in DeploymentManagerInfo.deploymentManagerId) implies
 		{dm : DeploymentManagerInfo | dm.deploymentManagerId = id} -> _200_OK
@@ -503,18 +530,18 @@ fun GET_DM [id : Identifier] : set Response -> ResponseCode {
 
 }
 
-// Get the O-Cloud
+// Get the O-Cloud Info
 fun GET_Cloud : set Response -> ResponseCode {	
 	{OCloudInfo} -> _200_OK
 }
 
 // Get the list of all subscriptions
-fun GET_ISList : set Response -> ResponseCode {	
+fun GET_InventorySubscriptionList : set Response -> ResponseCode {	
 	{InventorySubscriptionInfo} -> _200_OK
 }
 
 // Get a subscription given its id
-fun GET_IS [id : Identifier] : set Response -> ResponseCode {	
+fun GET_InventorySubscription [id : Identifier] : set Response -> ResponseCode {	
 	
 	(id in InventorySubscriptionInfo.subscriptionId) implies
 		{is : InventorySubscriptionInfo | is.subscriptionId = id} -> _200_OK
@@ -535,10 +562,23 @@ fun GET_AlarmDictionary [id : Identifier] : set Response -> ResponseCode {
 		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
 }
 
+// Get list of all PerformanceDictionaries
+fun GET_PerformanceDictionaryList : set Response -> ResponseCode {
+	{PerformanceDictionary} -> _200_OK
+}
+
+// Get a specific PerformanceDictionary
+fun GET_PerformanceDictionary [id : Identifier] : set Response -> ResponseCode {
+	(id in PerformanceDictionary.performanceDictionaryId) implies 
+		{pd :PerformanceDictionary | pd.performanceDictionaryId = id } ->_200_OK
+	else
+		{pd : ProblemDetails | pd.status = _404_NOT_FOUND} -> _404_NOT_FOUND
+}
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 one sig IMS{
-	var query_inbox : set Query
+	var query_inbox : lone Query
 }
 
 one sig SMO{
@@ -550,5 +590,5 @@ one sig SMO{
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Check & Run ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-run {} for 3 but exactly 15 ProblemDetails, exactly 3 Identifier, exactly 3 AlarmDictionary, exactly 1 AlarmDefinition, exactly 1 ProbableCause, exactly 1 Query, 50 steps
+run {} for 3 but exactly 15 ProblemDetails, exactly 3 ResourceInfo, exactly 1 ResourceTypeInfo, exactly 1 ResourcePoolInfo, exactly 1 DeploymentManagerInfo, exactly 1 AlarmDictionary, exactly 1 PerformanceDictionary, exactly 2 InventorySubscriptionInfo, exactly 2 AlarmDefinition, exactly 2 PerformanceMeasurementDefinition, exactly 5 Query, exactly 6 Identifier, 20 steps
 
