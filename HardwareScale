@@ -1,0 +1,123 @@
+// Developed from O-RAN-WG6.ORCH-USE-CASES-R004-v13.00 clause 3.1.5 Hardware Infrastructure Scaling of O-Cloud Post Deployment
+// We assume:
+//     - O-Clouds are installed and registered
+//     - Nodes are installed and swtiched on
+//     - Notification Event has been set up between IMS and SMO
+//     - IMS has been configured w/ the O-Cloud blueprint for the new Node
+
+// It can be assumed that one node shouldn't belong to multiple clouds. 
+// However, what happens if the Cloud Installer initiates this use case for two differnt O-Clouds with only one available Node. 
+// Following the spec, it seems that there is no failure case for when such an event transpires. 
+// As seen in the model, which attempts to follow the flow descibed, we arrive at a state where one Node exists within two clouds.
+// This highlights a potential hole in the spec. 
+
+sig oCloud {
+	ims : one IMS,
+	dms : one DMS,
+	guid : one GUID,
+	var nodes : set oCloudNode
+}
+
+abstract sig Manager {
+	cloud : one oCloud
+}
+
+sig IMS extends Manager {
+	var config_request : set oCloudNode->oCloud
+}
+	
+sig DMS extends Manager {}
+
+sig GUID {}
+
+one sig SMO {}
+
+sig oCloudNode {}
+
+abstract sig Operator {
+	var inbox : set oCloudNode->oCloud
+}
+
+one sig CloudInstaller extends Operator {}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	nodes' = nodes
+	inbox' = inbox
+	config_request' = config_request
+}
+
+pred act {
+	some node : oCloudNode, c : oCloud | expansion_request[node, c]  
+                                       or send_config_request[node,c] 
+                                       or process_config_request[node, c]
+}
+
+// simulates the decision to hardware scale
+pred expansion_request [node : oCloudNode, c : oCloud]{
+	
+	node not in oCloud.nodes //guard
+
+	inbox' = inbox + CloudInstaller->node->c
+
+	nodes' = nodes
+	config_request' = config_request
+}
+
+// simulates the interaction between the node to be added and the target IMS
+pred send_config_request [node : oCloudNode, c : oCloud] {
+	
+	node->c in CloudInstaller.inbox//guard
+	
+	config_request' = config_request + c.ims->node->c
+
+	nodes' = nodes
+	inbox' = inbox
+}
+
+pred process_config_request [node : oCloudNode, c : oCloud] {
+	
+	node->c in c.ims.config_request //guard
+
+	config_request' = config_request - c.ims->node->c
+	nodes' =nodes + c->node
+
+	inbox' = inbox
+}
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (stutter or act)
+}
+
+fact init {
+	all o : Operator | no o.inbox
+	all ims : IMS | no ims.config_request 
+	all c : oCloud | no c.nodes
+}
+
+fact unique_cloud_properties {
+	all disj a,b : oCloud | a.ims != b.ims and a.dms != b.dms and a.guid != b.guid
+}
+
+fact link_managers_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c implies c.dms = d
+	all i : IMS, c : oCloud | i.cloud = c implies c.ims = i
+}
+
+fact no_unused_managers {
+	all m : Manager | some m.cloud
+}
+
+// We assume that no two clouds can own the same Node
+assert nodes_belong_to_one_cloud {
+	always all disj a,b : oCloud | no (a.nodes & b.nodes)
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+check nodes_belong_to_one_cloud for 3 but exactly 2 oCloud, exactly 1 oCloudNode, exactly 4 Manager
+
