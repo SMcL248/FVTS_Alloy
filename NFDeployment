@@ -1,0 +1,146 @@
+// Developed from O-RAN-WG6.ORCH-USE-CASES-R004-v13.00 clause 3.2.1 - NF Deployment Instantiation
+// We assume:
+//     - SMO is healthy and available
+//     - O-Clouds are installed and registered
+//     - All nodes are instantiated
+//     - Connectivity exists between the O-Cloud and SMO
+
+// This process descibes the deployment of a Network Function (NF) upon an O-Cloud. 
+// Initially, I was concerned that a deployment request could be sent to the DMS even when there does not exist 
+// the resources to deploy the NF. This would cause an unexpected error case not specified.
+// However, the preconditions of the process state:
+//     - Requirements of deployment have been homed. (We have determined an appropriate place for deployment)
+//     - Cluster has been provisioned by IMS to support the NF deployments. (Such targered O-Cloud has been prepared for deployment)
+
+// In the code below, we simulate the SMO receiving DeploymentDescriptors (Info of a NF deployment). 
+// This will only be acted upon assumuing that the O-Cloud has the available resources.
+// This property has been formally verified with the use of an assertion. 
+
+sig oCloud {
+	ims : one IMS,
+	dms : one DMS,
+	guid : one GUID,
+	var nodes : set oCloudNode
+}
+
+abstract sig Manager {
+	cloud : one oCloud
+}
+
+sig IMS extends Manager {}
+	
+sig DMS extends Manager {
+	var deployment_requests : set NF
+}
+
+sig GUID {}
+
+one sig SMO {
+	var inbox : set DeploymentDescriptor
+}
+
+sig oCloudNode {
+	var deployment : lone NF
+}
+
+sig NF {}
+
+sig DeploymentDescriptor {
+	target : one oCloud,
+	payload : one NF
+}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	inbox' = inbox 
+	deployment' = deployment 
+	nodes' = nodes
+	deployment_requests' = deployment_requests
+}
+
+pred act {
+	some dd : DeploymentDescriptor | send_dd[dd] or initiate_deployment[dd] or finish_deployment[dd]
+}
+
+pred send_dd [dd : DeploymentDescriptor] {
+
+	historically dd not in SMO.inbox //guard
+	
+	inbox' = inbox + SMO->dd
+
+	deployment' = deployment 
+	nodes' = nodes
+	deployment_requests' = deployment_requests
+}
+
+pred initiate_deployment [dd : DeploymentDescriptor] {
+	
+	dd in SMO.inbox and some node : oCloudNode | node in dd.target.nodes and no node.deployment//guard
+
+	inbox' = inbox - SMO->dd
+
+	deployment_requests' = deployment_requests + dd.target.dms->dd.payload
+
+	deployment' = deployment 	
+	nodes' = nodes
+	
+}
+
+pred finish_deployment [dd : DeploymentDescriptor] {
+
+	dd.payload in dd.target.dms.deployment_requests //guard
+
+	deployment_requests' = deployment_requests - dd.target.dms->dd.payload
+
+	some node : oCloudNode | (node in dd.target.nodes and no node.deployment) and deployment' = deployment + node->dd.payload
+
+	inbox' = inbox 
+	nodes' = nodes	
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (stutter or act)
+}
+
+fact disj_NF {
+	all disj a,b : DeploymentDescriptor | a.payload != b.payload
+	all dd : DeploymentDescriptor | dd.payload not in oCloudNode.deployment
+}
+
+fact init {
+	all c : oCloud | some c.nodes
+	all node : oCloudNode | no node.deployment
+	no SMO.inbox
+	all d : DMS | no d.deployment_requests
+}
+
+fact unique_cloud_properties {
+	all disj a,b : oCloud | a.ims != b.ims and a.dms != b.dms and a.guid != b.guid
+}
+
+fact link_managers_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c implies c.dms = d
+	all i : IMS, c : oCloud | i.cloud = c implies c.ims = i
+}
+
+fact no_unused_managers {
+	all m : Manager | some m.cloud
+}	
+
+// Here we check that the request for NF deployment is only made assuming a free node.
+assert deployment_request_implies_free_resources {
+	always (all dd : DeploymentDescriptor | dd.payload in dd.target.dms.deployment_requests implies
+		 some node : oCloudNode | node in dd.target.nodes and no node.deployment
+	)
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//run {} for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 DeploymentDescriptor, exactly 1 oCloudNode
+
+check deployment_request_implies_free_resources for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 DeploymentDescriptor, exactly 1 oCloudNode
+
