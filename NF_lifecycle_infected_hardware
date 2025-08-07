@@ -496,7 +496,7 @@ assert NF_never_deployed_on_faulty_hardware{
 
 
 check NF_never_deployed_on_faulty_hardware for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 Manager, exactly 1 NF, exactly 5 Request, 20 steps
-
+/
 run {} for 3 but exactly 1 oCloud, exactly 2 oCloudNode, exactly 2 Manager, exactly 3 NF, exactly 5 Request, exactly 1 Resource, 20 steps
 
 
