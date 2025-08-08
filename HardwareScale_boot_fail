@@ -1,0 +1,135 @@
+sig oCloud {
+	ims : one IMS,
+	dms : one DMS,
+	guid : one GUID,
+	var nodes : set oCloudNode
+}
+
+enum Status {
+	SUCCESS,
+	FAILED
+}
+
+abstract sig Manager {
+	cloud : one oCloud
+}
+
+sig IMS extends Manager {
+	var config_request : set oCloudNode->oCloud
+}
+	
+sig DMS extends Manager {}
+
+sig GUID {}
+
+one sig SMO {}
+
+sig oCloudNode {
+	var boot : lone Status
+}
+
+abstract sig Operator {
+	var inbox : set oCloudNode->oCloud
+}
+
+one sig CloudInstaller extends Operator {}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	nodes' = nodes
+	inbox' = inbox
+	config_request' = config_request
+	boot' = boot
+}
+
+pred act {
+	some node : oCloudNode, c : oCloud | expansion_request[node, c]  or send_config_request[node,c] or process_config_request[node, c] or boot[node, c]
+}
+
+// simulates the decision to hardware scale
+pred expansion_request [node : oCloudNode, c : oCloud]{
+	
+	node not in oCloud.nodes
+
+	inbox' = inbox + CloudInstaller->node->c
+
+	nodes' = nodes
+	config_request' = config_request
+	boot' = boot
+}
+
+// simulates the interaction between the node to be added and the target clouds IMS
+pred send_config_request [node : oCloudNode, c : oCloud] {
+	
+	node->c in CloudInstaller.inbox//guard
+	
+	config_request' = config_request + c.ims->node->c
+
+	nodes' = nodes
+	inbox' = inbox
+	boot' = boot
+}
+
+// process request
+pred process_config_request [node : oCloudNode, c : oCloud] {
+	
+	node->c in c.ims.config_request and some node.boot//guard
+
+	config_request' = config_request - c.ims->node->c
+
+	node.boot = SUCCESS implies
+		nodes' =nodes + c->node
+	else 
+		nodes' = nodes
+
+	inbox' = inbox
+	boot' = boot
+}
+
+// sim node booting
+pred boot [node : oCloudNode, c : oCloud] {
+	node->c in c.ims.config_request and no node.boot//guard 
+
+	boot' = boot + node->FAILED or boot' = boot + node->SUCCESS
+
+	inbox' = inbox
+	nodes' = nodes
+	config_request' = config_request
+}
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (stutter or act)
+}
+
+fact init {
+	all o : Operator | no o.inbox
+	all ims : IMS | no ims.config_request 
+	all c : oCloud | no c.nodes
+	all node : oCloudNode | no node.boot
+}
+	
+fact unique_cloud_properties {
+	all disj a,b : oCloud | a.ims != b.ims and a.dms != b.dms and a.guid != b.guid
+}
+
+fact link_managers_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c implies c.dms = d
+	all i : IMS, c : oCloud | i.cloud = c implies c.ims = i
+}
+
+fact no_unused_managers {
+	all m : Manager | some m.cloud
+}	
+
+
+assert always_successful {
+	always (all node : oCloudNode, c : oCloud | (before some c.ims.config_request and no c.ims.config_request) implies some c.nodes)
+}
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+check always_successful for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 Manager
+
