@@ -1,0 +1,385 @@
+sig oCloud {
+	ims : one IMS,
+	dms : one DMS,
+	guid : one GUID,
+	nodes : set oCloudNode,
+	var pool : set Resource
+}
+
+enum Activity {
+	ACTIVE,
+	STALE,
+	SUCCESS,
+	FAILED
+}
+
+enum Response {
+	OK,
+	ERROR,
+	ROLLBACK
+}
+
+enum Operation {
+	ADD,
+	UPDATE,
+	SCALE_IN,
+	SCALE_OUT,
+	TERMINATE
+}
+
+sig Resource {}
+
+abstract sig Manager {
+	cloud : one oCloud
+}
+
+sig IMS extends Manager {}
+	
+sig DMS extends Manager {
+	var requests : set Request
+}
+
+sig Request {
+	operation : one Operation,
+	dd : one DeploymentDescriptor,
+	replacing : lone NF
+}
+
+sig GUID {}
+
+one sig SMO {
+	var inbox : set Request,
+	var response_inbox : set Request->Response
+}
+
+sig oCloudNode {
+	var deployment : set NF
+}
+
+sig NF {
+	var status : one Activity,
+	var resources: set Resource
+}
+
+sig DeploymentDescriptor {
+	target : one oCloud,
+	payload : one NF
+}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	inbox' = inbox 
+	deployment' = deployment 
+	requests' = requests
+	status' = status
+	response_inbox' = response_inbox
+	resources' = resources
+	pool' = pool
+}
+
+pred clear_response {
+	some response_inbox
+
+	response_inbox' = response_inbox  - response_inbox
+
+	inbox' = inbox 
+	deployment' = deployment 
+	requests' = requests
+	status' = status
+	resources' = resources
+	pool' = pool
+}
+
+pred act {
+	some r : Request | send_dd[r] or 
+				     initiate_deployment[r] or 
+				     finish_deployment[r] or 
+				     initiate_scale_out[r] or
+			             finish_scale_out[r] or
+				     initiate_scale_in[r] or 
+				     finish_scale_in[r] or 
+			             initiate_termination[r] or
+				     finish_termination[r] or
+				     initiate_update[r] or
+				     deploy_update[r] or 
+				     sim_update[r] or
+				     evaluate_update[r]
+}
+
+
+pred send_dd [r : Request] {
+
+	historically r not in SMO.inbox //guard
+	
+	inbox' = inbox + SMO->r
+
+	deployment' = deployment 
+	requests' = requests
+	status' = status
+	response_inbox' = response_inbox
+	resources' = resources
+	pool' = pool
+}
+
+pred initiate_deployment [r : Request] {
+	
+	r.operation = ADD and r in SMO.inbox and some node : oCloudNode | node in r.dd.target.nodes//guard
+
+	inbox' = inbox - SMO->r
+
+	requests' = requests + r.dd.target.dms->r
+
+	deployment' = deployment 	
+	status' = status
+	response_inbox' = response_inbox
+	resources' = resources
+	pool' = pool
+}
+
+pred finish_deployment [r : Request] {
+
+	r.operation = ADD and r in r.dd.target.dms.requests //guard
+
+	requests' = requests - r.dd.target.dms->r
+
+	some node : oCloudNode | (node in r.dd.target.nodes) and deployment' = deployment + node->r.dd.payload
+										     and status' = status - r.dd.payload->r.dd.payload.status + r.dd.payload->ACTIVE
+										     and response_inbox' = response_inbox + SMO->r->OK
+
+	inbox' = inbox 
+	resources' = resources
+	pool' = pool
+}
+
+pred initiate_scale_out [r : Request] {
+
+	r.operation = SCALE_OUT and r in SMO.inbox and r.dd.payload in r.dd.target.nodes.deployment //guard
+	
+	inbox' = inbox - SMO->r
+
+	requests' = requests + r.dd.target.dms->r
+
+	deployment' = deployment 
+	status' = status
+	response_inbox' = response_inbox
+	resources' = resources
+	pool' = pool
+	
+}
+
+pred finish_scale_out[r : Request] {
+	
+	r.operation = SCALE_OUT and r in r.dd.target.dms.requests//guard
+
+	requests' = requests - r.dd.target.dms->r
+
+	some r.dd.target.pool implies(
+		some resource : Resource | resource in r.dd.target.pool and resource not in NF.resources and
+							   resources' = resources + r.dd.payload->resource and
+							   pool' = pool - r.dd.target->resource and
+							   response_inbox' = response_inbox +SMO->r->OK
+	)
+	else(
+		resources' = resources and
+		pool' = pool and
+		response_inbox' = response_inbox + SMO->r->ERROR
+	)
+	
+	status' = status
+	deployment' = deployment 
+	inbox' = inbox
+}
+
+pred initiate_scale_in [r : Request] {
+
+	r.operation = SCALE_IN and r in SMO.inbox and dd.payload in dd.target.nodes.deployment//guard
+	
+	inbox' = inbox - SMO->r
+
+	requests' = requests + r.dd.target.dms->r
+
+	deployment' = deployment 
+	status' = status
+	response_inbox' = response_inbox
+	resources' = resources
+	pool' = pool
+	
+}
+
+pred finish_scale_in[r : Request] {
+	
+	r.operation = SCALE_IN and r in r.dd.target.dms.requests//guard
+
+	requests' = requests - r.dd.target.dms->r
+
+	some r.dd.payload.resources implies(
+		some resource : Resource | resource in r.dd.payload.resources and 
+							  resources' = resources - r.dd.payload->resource and
+							  pool' = pool + r.dd.target->resource and
+							  response_inbox' = response_inbox + SMO->r->OK
+	)
+	else(
+		resources' = resources and
+		pool' = pool and 
+		response_inbox' = response_inbox + SMO->r->ERROR
+	)
+	
+	status' = status
+	deployment' = deployment 
+	inbox' = inbox
+}
+
+pred initiate_termination [r : Request] {
+
+	r.operation = TERMINATE and r in SMO.inbox and r.dd.payload in oCloudNode.deployment//guard
+
+	inbox' = inbox - SMO->r
+
+	requests' = requests + r.dd.target.dms->r
+
+	deployment' = deployment 
+	status' = status
+	response_inbox' = response_inbox
+	resources' = resources
+	pool' = pool
+}
+
+pred finish_termination [r : Request] {
+
+	r.operation = TERMINATE and r in r.dd.target.dms.requests //guard
+
+	requests'= requests - r.dd.target.dms->r
+
+	r.dd.payload in r.dd.target.nodes.deployment implies (
+		pool' = pool + r.dd.target->r.dd.payload.resources and 
+		resources' = resources - r.dd.payload->r.dd.payload.resources and 
+		some node : oCloudNode |(r.dd.payload in node.deployment and deployment' = deployment - node->r.dd.payload) and 
+		status' = status - r.dd.payload->r.dd.payload.status + r.dd.payload->STALE and 
+		response_inbox' = response_inbox + SMO->r->OK
+	)else(
+		pool' = pool and
+		resources' = resources and
+		deployment' = deployment and
+		status' = status and
+		response_inbox' = response_inbox + SMO->r->ERROR
+	)
+
+	inbox' = inbox
+}
+
+pred initiate_update [r : Request] {
+
+	r.operation = UPDATE and r.replacing in oCloudNode.deployment and r in SMO.inbox//guard
+
+	inbox' = inbox - SMO->r
+
+	requests' = requests + r.dd.target.dms->r
+
+	resources' = resources
+	deployment' = deployment 
+	status' = status
+	response_inbox' = response_inbox
+	pool' = pool
+}
+
+pred deploy_update [r : Request] {
+	
+	r.operation = UPDATE and r in r.dd.target.dms.requests//guard
+	
+	some r_add : Request | r_add.operation = ADD and r_add.dd = r.dd and requests' = requests + r_add.dd.target.dms->r_add
+
+	inbox' = inbox
+	resources' = resources
+	deployment' = deployment 
+	response_inbox' = response_inbox
+	pool' = pool
+	status' = status
+}
+
+pred sim_update [r : Request] {
+
+	r.operation = UPDATE and r in r.dd.target.dms.requests and r.dd.payload.status = ACTIVE	//guard
+
+	status' = status - r.dd.payload->r.dd.payload.status + r.dd.payload->SUCCESS or 
+	status' = status - r.dd.payload->r.dd.payload.status + r.dd.payload->FAILED
+	
+	requests' = requests
+	inbox' = inbox
+	resources' = resources
+	deployment' = deployment 
+	response_inbox' = response_inbox
+	pool' = pool
+}
+
+pred evaluate_update [r : Request] {
+	
+	r.operation = UPDATE and r in r.dd.target.dms.requests and (r.dd.payload.status = SUCCESS  or r.dd.payload.status = FAILED) //guard
+
+	(r.dd.payload.status = SUCCESS) implies(
+		(some r_term : Request | r_term.operation = TERMINATE and r_term.dd.payload = r.replacing and r_term.dd.target = r.dd.target and requests' = requests - r.dd.target.dms->r + r.dd.target.dms->r_term)
+		and response_inbox' = response_inbox + SMO->r->OK
+		and status' = status - r.dd.payload->r.dd.payload.status + r.dd.payload->ACTIVE 
+	)
+	else(
+		(some r_term : Request | r_term.operation = TERMINATE and r_term.dd = r.dd and requests' = requests - r.dd.target.dms->r + r.dd.target.dms->r_term)
+		and response_inbox' = response_inbox + SMO->r->ROLLBACK
+		and status' = status
+	)
+
+	inbox' = inbox
+	resources' = resources
+	deployment' = deployment 
+	pool' = pool
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (act or stutter)
+}
+
+fact all_resource_in_cloud {
+	all r : Resource | r in oCloud.pool or r in NF.resources
+}
+
+fact disj_NF {
+	all disj a,b : DeploymentDescriptor | a.payload != b.payload
+}
+
+fact init {
+	all c : oCloud | some c.nodes
+//	all node : oCloudNode | no node.deployment
+	no SMO.inbox and no SMO.response_inbox
+	all d : DMS | no d.requests
+	all nf : NF | nf in oCloudNode.deployment // nf.status = STALE and no nf.resources
+	all node : oCloudNode | some node.deployment implies node in oCloud.nodes
+	all r : Resource | r in NF.resources <=> r not in oCloud.pool
+	all nf : NF | some nf.resources implies nf in oCloudNode.deployment
+	all disj a,b : oCloud | no (a.nodes & b.nodes)
+}
+
+fact unique_cloud_properties {
+	all disj a,b : oCloud | a.ims != b.ims and a.dms != b.dms and a.guid != b.guid
+}
+
+fact link_managers_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c implies c.dms = d
+	all i : IMS, c : oCloud | i.cloud = c implies c.ims = i
+}
+
+fact only_update_requests_have_replacing_field {
+	all r : Request | r.operation = UPDATE <=> some r.replacing
+	all r : Request | r.replacing != r.dd.payload
+	all disj a,b : Request | a.operation = b.operation implies a.dd != b.dd 
+}
+
+fact upgrade_and_downgrade {
+	eventually (some disj a,b : Request | a.operation = UPDATE and b.operation = UPDATE and a in DMS.requests and b in DMS.requests)
+	always (all r : Request | r.operation = UPDATE implies eventually (r->OK in SMO.response_inbox) or (r->ROLLBACK in SMO.response_inbox))
+	eventually (no oCloudNode.deployment)
+}
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+run {} for 3 but exactly 1 oCloud, exactly 2 oCloudNode, exactly 2 Manager, exactly 2 NF, exactly 2 DeploymentDescriptor, exactly 6 Request, 20 steps
