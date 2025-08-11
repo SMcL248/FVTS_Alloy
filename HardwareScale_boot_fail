@@ -78,10 +78,7 @@ pred process_config_request [node : oCloudNode, c : oCloud] {
 
 	config_request' = config_request - c.ims->node->c
 
-	node.boot = SUCCESS implies
-		nodes' =nodes + c->node
-	else 
-		nodes' = nodes
+	nodes' =nodes + c->node
 
 	inbox' = inbox
 	boot' = boot
@@ -121,15 +118,10 @@ fact link_managers_with_correct_cloud {
 	all i : IMS, c : oCloud | i.cloud = c implies c.ims = i
 }
 
-fact no_unused_managers {
-	all m : Manager | some m.cloud
-}	
-
-
-assert always_successful {
-	always (all node : oCloudNode, c : oCloud | (before some c.ims.config_request and no c.ims.config_request) implies some c.nodes)
+assert all_instantiated_nodes_booted {
+	always (all node : oCloudNode, c : oCloud | (node in c.nodes implies node.boot = SUCCESS))
 }
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-check always_successful for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 Manager
+check all_instantiated_nodes_booted for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 Manager
 
