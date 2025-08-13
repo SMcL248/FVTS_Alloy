@@ -1,0 +1,117 @@
+sig oCloud {
+	var available : set VLAN_ID,
+	var requests : set Request
+}
+
+enum Operation {
+	ALLOCATE,
+	DEALLOCATE
+}
+
+enum Response {
+	OK, 
+	ERROR
+}
+
+sig Request {
+	clouds : set oCloud,
+	operation : one Operation,
+	id : one VLAN_ID
+}
+
+sig VLAN_ID {}
+
+one sig SMO {
+	var ids : set VLAN_ID,
+	var response: set Request->Response
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	available' = available 
+	requests' = requests
+	ids' = ids
+	response' = response
+}
+
+pred act {
+	some r : Request, c : oCloud | send_request[r, c] or process_allocate[r, c] or process_deallocate[r, c]
+}
+	
+pred send_request [r : Request, c : oCloud] {
+
+	c in r.clouds//guard
+
+	requests' = requests + r.clouds->r
+
+	ids' = ids
+	available' = available
+	response' = response
+
+}
+
+pred process_allocate [r : Request, c : oCloud] {
+	
+	r in c.requests and r.operation = ALLOCATE//guard
+
+	requests' = requests - c->r
+
+	some c.available implies (
+		some id : VLAN_ID | 
+			id in c.available and 
+			available' = available - c->id and 
+			ids' = ids + SMO->id and
+			response' = response + SMO->r->OK
+	)else(
+		available' = available and 
+		ids' = ids and 
+		response' = response + SMO->r->ERROR
+	)		
+}
+
+pred process_deallocate [r : Request, c : oCloud] {
+	
+	r in c.requests and r.operation = DEALLOCATE//guard
+
+	requests' = requests - c->r
+
+	(r.id in SMO.ids and once r.id in c.available) implies(
+		available' = available + c->r.id and 
+		ids' = ids - SMO->r.id and
+		response' = response + SMO->r->OK
+	)else(
+		available' = available and 
+		ids' = ids and 
+		response' = response + SMO->r->ERROR
+	)		
+}	
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (act or stutter)
+}
+
+fact init {
+	all c : oCloud | no c.requests
+	no SMO.response and no SMO.ids
+	all r : Request | some r.clouds
+	oCloud.available = VLAN_ID
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+assert deallocated_id_can_be_reallocated {
+	always (all id : VLAN_ID | (before id not in oCloud.available and id in oCloud.available) implies always (id not in SMO.ids))
+}
+
+check deallocated_id_can_be_reallocated for 3 but exactly 1 oCloud, exactly 1 VLAN_ID, exactly 2 Request, 20 steps
+
+run {} for 3 but exactly 1 oCloud, exactly 1 VLAN_ID, exactly 2 Request, 20 steps
+
+
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
