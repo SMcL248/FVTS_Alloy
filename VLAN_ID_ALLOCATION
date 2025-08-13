@@ -1,0 +1,97 @@
+sig oCloud {
+	var available : set VLAN_ID,
+	var requests : set Request
+}
+
+sig Request {
+	clouds : set oCloud
+}
+
+sig VLAN_ID {}
+
+one sig SMO {
+	var ids : set VLAN_ID,
+	var dup: set VLAN_ID
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	available' = available 
+	requests' = requests
+	ids' = ids
+	dup' =dup
+}
+
+pred act {
+	some r : Request, c : oCloud | send_request[r, c] or process_request[r, c]
+}
+	
+pred send_request [r : Request, c : oCloud] {
+
+	c in r.clouds//guard
+
+	requests ' = requests + r.clouds->r
+
+	ids' = ids
+	available' = available
+	dup' = dup
+
+}
+
+pred process_request [r : Request, c : oCloud] {
+	
+	r in c.requests //guard
+
+	requests' = requests - c->r
+
+	some c.available implies (
+		some id : VLAN_ID | 
+			id in c.available and 
+			available' = available - c->id and 
+			(id in SMO.ids implies (dup' = dup + SMO->id and ids' = ids)
+			 else (ids' = ids + SMO->id and dup' = dup))
+	)else(
+		available' = available and ids' = ids and dup' = dup
+	)
+
+}	
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (act or stutter)
+}
+
+fact init {
+	all c : oCloud | no c.requests
+	no SMO.ids and no SMO.dup
+	all r : Request | some r.clouds
+	oCloud.available = VLAN_ID
+}
+
+fact clear_available {
+	all c : oCloud | some c.available
+	eventually (no oCloud.available and no oCloud.requests)
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+assert each_id_appears_once {
+	always (no SMO.dup)
+}
+
+assert check_dup_functionallity {
+	always (all id : VLAN_ID, c : oCloud | (before (id in c.available and id in SMO.ids) and id not in c.available) implies id in SMO.dup)
+}
+
+
+check check_dup_functionallity for 3 but exactly 2 oCloud, exactly 1 VLAN_ID, exactly 1 Request
+check each_id_appears_once for 3 but exactly 2 oCloud, exactly 1 VLAN_ID, exactly 1 Request
+
+run {} for 3 but exactly 2 oCloud, exactly 3 VLAN_ID, exactly 1 Request
+
+
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
