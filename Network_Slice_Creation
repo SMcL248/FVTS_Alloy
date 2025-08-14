@@ -1,0 +1,182 @@
+sig oCloud {
+	var available : set VLAN_ID,
+	var requests : set Slice,
+	var deployed : set NF,
+	hardware : lone Node
+}
+
+sig Slice {
+	var ids : set oCloud->VLAN_ID,
+	nfs : set NF,
+	var status : one Response
+}
+
+sig Node {}
+
+sig NF {
+	var trunk : set VLAN_ID,
+	var connection : set Slice->Response
+}
+
+enum Operation {
+	ALLOCATE,
+	DEALLOCATE
+}
+
+enum Response {
+	OK, 
+	ERROR
+}
+
+sig VLAN_ID {}
+
+one sig SMO {
+	var response: set Slice->Response
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	available' = available 
+	requests' = requests
+	ids' = ids
+	response' = response
+	trunk' = trunk
+	deployed' = deployed
+	connection' = connection
+	status' = status
+}
+
+pred act {
+	some s : Slice, c : oCloud | send_request[s] or allocate[s,c] or deploy[s,c] or 
+	some s : Slice, nf : NF | sim_connection[s, nf]
+}
+	
+pred send_request [s : Slice] {
+
+	s not in oCloud.requests//guard
+
+	all c : oCloud | 
+		some (c.deployed & s.nfs) implies 
+			requests' = requests + c->s
+		else 
+			requests' = requests
+
+	ids' = ids
+	available' = available
+	response' = response
+	trunk' = trunk
+	deployed' = deployed
+	connection' = connection
+	status' = status
+
+}
+
+pred allocate [s : Slice, c : oCloud] {
+
+	s in c.requests and no {id  :VLAN_ID | c->id in s.ids} and s.status = OK//guard
+
+	some c.available implies(
+		some id : VLAN_ID | 
+			id in c.available and 
+			available' = available - c->id and 
+			(all nf : NF | nf in (s.nfs & c.deployed) implies nf.trunk' = nf.trunk + id else nf.trunk' = nf.trunk) and
+			ids' = ids + s->c->id and
+			status' = status
+	)else(
+		available' = available and 
+		trunk' = trunk and
+		ids' = ids and
+		status' = status - s->OK + s->ERROR
+	)		
+
+	deployed' = deployed
+	requests' = requests
+	response' = response
+	connection' = connection
+}
+
+
+pred deploy [s : Slice, c : oCloud] {
+
+	(some nf : NF | nf in s.nfs and nf not in oCloud.deployed) and (some id : VLAN_ID | c->id in s.ids) and s.status = OK//guard
+	
+	some c.hardware implies(
+		some nf : NF | nf in s.nfs and nf not in oCloud.deployed and
+			deployed' = deployed + c->nf and 
+			trunk' = trunk + nf->extract_id[s, c] and
+			status' = status
+	)else(
+		deployed' = deployed and 
+		trunk' = trunk and
+		status' = status - s->OK + s->ERROR
+	)
+
+	available' = available 
+	requests' = requests
+	ids' = ids
+	response' = response
+	connection' = connection
+}
+
+pred sim_connection [s :Slice, nf : NF] {
+
+	(all n : NF | n in s.nfs implies some n.trunk and n in oCloud.deployed) and s.status = OK and no {r : Response | s->r in nf.connection} and nf in s.nfs//guard
+
+	(connection' = connection + nf->s->OK and status' = status) or (connection' = connection + nf->s->ERROR and status' = status - s->OK + s->ERROR)
+
+	available' = available 
+	requests' = requests
+	ids' = ids
+	response' = response
+	trunk' = trunk
+	deployed' = deployed
+}
+
+pred catch_error [s : Slice, c : oCLoud] {
+	
+	s.status = ERROR and s in c.requests//guard
+
+	requests' = requests - c->s
+	
+	response' = response + SMO->s->ERROR
+	
+}
+
+pred catch_success [s : Slice, c : oCloud] {
+	s.status = OK and all nf : NF | nf in s.nfs and nf in oCloud.deployed and some 
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fun extract_id [s : Slice, c : oCloud] : one VLAN_ID{
+
+	{id : VLAN_ID | c->id in s.ids}
+
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (act or stutter)
+}
+
+fact init {
+	all nf : NF | no NF.connection and no nf.trunk
+	all c : oCloud | no c.requests and some c.hardware
+	no SMO.response
+	all s : Slice | no s.ids and s.status = OK and some s.nfs
+	oCloud.available = VLAN_ID
+}
+
+fact temp {
+	eventually (all nf : NF | nf in Slice.nfs and some nf.connection)
+	(NF in Slice.nfs)
+//	eventually (some s : Slice, c : oCloud | deploy[s, c])
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+run {} for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 Node, exactly 2 VLAN_ID, exactly 1 Slice
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
