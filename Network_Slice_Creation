@@ -14,8 +14,7 @@ sig Slice {
 sig Node {}
 
 sig NF {
-	var trunk : set VLAN_ID,
-	var connection : set Slice->Response
+	var trunk : set VLAN_ID
 }
 
 enum Operation {
@@ -43,13 +42,11 @@ pred stutter {
 	response' = response
 	trunk' = trunk
 	deployed' = deployed
-	connection' = connection
 	status' = status
 }
 
 pred act {
-	some s : Slice, c : oCloud | send_request[s] or allocate[s,c] or deploy[s,c] or 
-	some s : Slice, nf : NF | sim_connection[s, nf]
+	some s : Slice, c : oCloud | send_request[s] or allocate[s,c] or deploy[s,c] or catch_error[s] or catch_success[s]
 }
 	
 pred send_request [s : Slice] {
@@ -58,16 +55,15 @@ pred send_request [s : Slice] {
 
 	all c : oCloud | 
 		some (c.deployed & s.nfs) implies 
-			requests' = requests + c->s
+			c.requests' = c.requests + s
 		else 
-			requests' = requests
+			c.requests' = c.requests
 
 	ids' = ids
 	available' = available
 	response' = response
 	trunk' = trunk
 	deployed' = deployed
-	connection' = connection
 	status' = status
 
 }
@@ -93,7 +89,6 @@ pred allocate [s : Slice, c : oCloud] {
 	deployed' = deployed
 	requests' = requests
 	response' = response
-	connection' = connection
 }
 
 
@@ -116,43 +111,44 @@ pred deploy [s : Slice, c : oCloud] {
 	requests' = requests
 	ids' = ids
 	response' = response
-	connection' = connection
 }
 
-pred sim_connection [s :Slice, nf : NF] {
+pred catch_error [s : Slice] {
+	
+	s.status = ERROR and s in oCloud.requests//guard
 
-	(all n : NF | n in s.nfs implies some n.trunk and n in oCloud.deployed) and s.status = OK and no {r : Response | s->r in nf.connection} and nf in s.nfs//guard
+	all c : oCloud | s in c.requests implies c.requests' = c.requests - s else c.requests' = c.requests
 
-	(connection' = connection + nf->s->OK and status' = status) or (connection' = connection + nf->s->ERROR and status' = status - s->OK + s->ERROR)
+	all c : oCloud, id : VLAN_ID | (all nf : NF | (c->id in s.ids and nf in c.deployed and id in nf.trunk) implies nf.trunk' = nf.trunk - id else nf.trunk' = nf.trunk) and
+		(c->id in s.ids implies (c.available' = c.available + id and s.ids' = s.ids - c->id) else (c.available' = c.available and s.ids' = s.ids))
+
+	response' = response + SMO->s->ERROR
+
+	deployed' = deployed
+	status' = status
+	
+}
+
+pred catch_success [s : Slice] {
+
+	s.status = OK and (all nf : NF | nf in s.nfs and nf in oCloud.deployed and some nf.trunk) and s in oCloud.requests //guard
+
+	all c : oCloud | s in c.requests implies c.requests' = c.requests - s else c.requests' = c.requests
+	
+	response' = response + SMO->s->OK
 
 	available' = available 
-	requests' = requests
 	ids' = ids
-	response' = response
 	trunk' = trunk
 	deployed' = deployed
-}
+	status' = status
 
-pred catch_error [s : Slice, c : oCLoud] {
-	
-	s.status = ERROR and s in c.requests//guard
-
-	requests' = requests - c->s
-	
-	response' = response + SMO->s->ERROR
-	
-}
-
-pred catch_success [s : Slice, c : oCloud] {
-	s.status = OK and all nf : NF | nf in s.nfs and nf in oCloud.deployed and some 
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 fun extract_id [s : Slice, c : oCloud] : one VLAN_ID{
-
 	{id : VLAN_ID | c->id in s.ids}
-
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -162,21 +158,22 @@ fact act_or_stutter {
 }
 
 fact init {
-	all nf : NF | no NF.connection and no nf.trunk
+	all nf : NF | no nf.trunk
 	all c : oCloud | no c.requests and some c.hardware
 	no SMO.response
 	all s : Slice | no s.ids and s.status = OK and some s.nfs
 	oCloud.available = VLAN_ID
+	some disj a,b : oCloud, s : Slice| (some nf: NF | nf in s.nfs and nf in a.deployed) and (some nf : NF | nf in s.nfs and nf in b.deployed)
+//	some nf : NF | nf in Slice.nfs and nf not in oCloud.deployed
 }
 
 fact temp {
-	eventually (all nf : NF | nf in Slice.nfs and some nf.connection)
-	(NF in Slice.nfs)
-//	eventually (some s : Slice, c : oCloud | deploy[s, c])
+	all disj a,b : oCloud | no (a.deployed & b.deployed)
+	eventually (some s :Slice | s->OK in SMO.response)
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-run {} for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 Node, exactly 2 VLAN_ID, exactly 1 Slice
+run {} for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 VLAN_ID, exactly 1 Slice, 20 steps
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
