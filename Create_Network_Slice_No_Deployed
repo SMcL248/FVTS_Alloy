@@ -1,20 +1,20 @@
 sig oCloud {
 	var available : set VLAN_ID,
-	var requests : set Request,
+	var requests : set Slice,
 	var deployed : set NF,
 	hardware : lone Node
 }
 
 sig Slice {
 	var ids : set oCloud->VLAN_ID,
-	nfs : set NF
+	nfs : set NF,
+	var status : one Response
 }
 
 sig Node {}
 
 sig NF {
-	var trunk : set VLAN_ID,
-	var connection : lone Response
+	var trunk : set VLAN_ID
 }
 
 enum Operation {
@@ -27,16 +27,10 @@ enum Response {
 	ERROR
 }
 
-sig Request {
-	slice : one Slice,
-	var vlan : set oCloud->VLAN_ID,
-	var status : one Response
-}
-
 sig VLAN_ID {}
 
 one sig SMO {
-	var response: set Request->Response
+	var response: set Slice->Response
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -48,58 +42,113 @@ pred stutter {
 	response' = response
 	trunk' = trunk
 	deployed' = deployed
-	vlan' = vlan
-	connection' = connection
 	status' = status
 }
 
 pred act {
-	some r : Request, c : oCloud | send_request[r] or allocate[r,c]
+	some s : Slice, c : oCloud | send_request[s] or allocate[s,c] or deploy[s,c] or catch_error[s] or catch_success[s]
 }
 	
-pred send_request [r : Request] {
+pred send_request [s : Slice] {
 
-	r not in oCloud.requests//guard
+	s not in oCloud.requests//guard
 
 	all c : oCloud | 
-		some (c.deployed & r.slice.nfs) implies 
-			requests' = requests + c->r 
+		some (c.deployed & s.nfs) implies 
+			c.requests' = c.requests + s
 		else 
-			requests' = requests
+			c.requests' = c.requests
 
 	ids' = ids
 	available' = available
 	response' = response
 	trunk' = trunk
 	deployed' = deployed
-	vlan' = vlan
-	connection' = connection
 	status' = status
 
 }
 
+pred allocate [s : Slice, c : oCloud] {
 
-pred allocate [r : Request, c : oCloud] {
-
-	r in c.requests and some id : VLAN_ID | c->id not in r.vlan and r.status = OK//guard
+	s in c.requests and no {id  :VLAN_ID | c->id in s.ids} and s.status = OK//guard
 
 	some c.available implies(
 		some id : VLAN_ID | 
 			id in c.available and 
 			available' = available - c->id and 
-			(all nf : NF | nf in (r.slice.nfs & c.deployed) and trunk' = trunk + nf->id) and
-			vlan' = vlan + r->c->id and
-			ids' = ids + r.slice->c->id and
+			(all nf : NF | nf in (s.nfs & c.deployed) implies nf.trunk' = nf.trunk + id else nf.trunk' = nf.trunk) and
+			ids' = ids + s->c->id and
 			status' = status
 	)else(
 		available' = available and 
-		vlan' = vlan and
+		trunk' = trunk and
 		ids' = ids and
-		status' = status - r->OK + r->ERROR
+		status' = status - s->OK + s->ERROR
 	)		
 
+	deployed' = deployed
 	requests' = requests
-	connection' = connection
+	response' = response
+}
+
+
+pred deploy [s : Slice, c : oCloud] {
+
+	(some nf : NF | nf in s.nfs and nf not in oCloud.deployed) and (some id : VLAN_ID | c->id in s.ids) and s.status = OK//guard
+	
+	some c.hardware implies(
+		some nf : NF | nf in s.nfs and nf not in oCloud.deployed and
+			deployed' = deployed + c->nf and 
+			trunk' = trunk + nf->extract_id[s, c] and
+			status' = status
+	)else(
+		deployed' = deployed and 
+		trunk' = trunk and
+		status' = status - s->OK + s->ERROR
+	)
+
+	available' = available 
+	requests' = requests
+	ids' = ids
+	response' = response
+}
+
+pred catch_error [s : Slice] {
+	
+	s.status = ERROR and s in oCloud.requests//guard
+
+	all c : oCloud | s in c.requests implies c.requests' = c.requests - s else c.requests' = c.requests
+
+	all c : oCloud, id : VLAN_ID | (all nf : NF | (c->id in s.ids and nf in c.deployed and id in nf.trunk) implies nf.trunk' = nf.trunk - id else nf.trunk' = nf.trunk) and
+		(c->id in s.ids implies (c.available' = c.available + id and s.ids' = s.ids - c->id) else (c.available' = c.available and s.ids' = s.ids))
+
+	response' = response + SMO->s->ERROR
+
+	deployed' = deployed
+	status' = status
+	
+}
+
+pred catch_success [s : Slice] {
+
+	s.status = OK and (all nf : NF | nf in s.nfs implies (some c : oCloud, id : VLAN_ID | c->id in s.ids and nf in c.deployed and id in nf.trunk)) and s in oCloud.requests //guard
+
+	all c : oCloud | s in c.requests implies c.requests' = c.requests - s else c.requests' = c.requests
+	
+	response' = response + SMO->s->OK
+
+	available' = available 
+	ids' = ids
+	trunk' = trunk
+	deployed' = deployed
+	status' = status
+
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fun extract_id [s : Slice, c : oCloud] : one VLAN_ID{
+	{id : VLAN_ID | c->id in s.ids}
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -109,25 +158,40 @@ fact act_or_stutter {
 }
 
 fact init {
-  some Slice
-	all nf : NF | no NF.connection and no nf.trunk
+	all nf : NF | no nf.trunk
 	all c : oCloud | no c.requests and some c.hardware
 	no SMO.response
-	all r : Request | no r.vlan and r.status = OK
+	all s : Slice | no s.ids and s.status = OK and some s.nfs
 	oCloud.available = VLAN_ID
-  all s : Slice | no s.ids and some s.nfs
+	some disj a,b : oCloud, s : Slice| (some nf: NF | nf in s.nfs and nf in a.deployed) and (some nf : NF | nf in s.nfs and nf in b.deployed)
+//	some nf : NF | nf in Slice.nfs and nf not in oCloud.deployed
 }
 
-/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-assert no_deployed_nfs {
-	all r : Request | (all nf : NF | nf in r.slice.nfs and nf not in oCloud.deployed) implies always r not in oCloud.requests
+fact temp {
+//	all disj a,b : oCloud | no (a.deployed & b.deployed)
+//	all disj a,b : Slice | some (a.nfs & b.nfs)
+//	eventually (all s :Slice | s->OK in SMO.response)
 }
 
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-check for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 Request, exactly 1 Node, exactly 2 VLAN_ID, exactly 1 Slice
+// If the SMO recieves a response, then in all previous states, there has been some deployed NF.
+// Valid assertion implies that there exists no traces were a creation request is handled but there was initially no deployed NFs. 
+// A system in which no NFs are deployed is a valid one. Hence this reveals a problem
+assert blah {
+	always (some SMO.response implies historically some oCloud.deployed)
+}
 
-run {} for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 Request, exactly 1 Node, exactly 2 VLAN_ID, exactly 1 Slice
+// If initially there are no NFs in deployment, then even though pre-conditions are met, a slice creation request can never be sent. 
+assert blah2 {
+	(no oCloud.deployed implies always no oCloud.requests)
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+check blah2 for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 VLAN_ID, exactly 1 Slice, 20 steps
+check blah for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 VLAN_ID, exactly 1 Slice, 20 steps
+
+run {} for 3 but exactly 2 oCloud, exactly 3 NF, exactly 2 VLAN_ID, exactly 2 Slice, 20 steps
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
