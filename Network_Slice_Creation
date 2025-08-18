@@ -131,7 +131,7 @@ pred catch_error [s : Slice] {
 
 pred catch_success [s : Slice] {
 
-	s.status = OK and (all nf : NF | nf in s.nfs and nf in oCloud.deployed and some nf.trunk) and s in oCloud.requests //guard
+	s.status = OK and (all nf : NF | nf in s.nfs implies (some c : oCloud, id : VLAN_ID | c->id in s.ids and nf in c.deployed and id in nf.trunk)) and s in oCloud.requests //guard
 
 	all c : oCloud | s in c.requests implies c.requests' = c.requests - s else c.requests' = c.requests
 	
@@ -169,11 +169,12 @@ fact init {
 
 fact temp {
 	all disj a,b : oCloud | no (a.deployed & b.deployed)
-	eventually (some s :Slice | s->OK in SMO.response)
+	all disj a,b : Slice | some (a.nfs & b.nfs)
+	eventually (all s :Slice | s->OK in SMO.response)
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-run {} for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 VLAN_ID, exactly 1 Slice, 20 steps
+run {} for 3 but exactly 2 oCloud, exactly 3 NF, exactly 2 VLAN_ID, exactly 2 Slice, 20 steps
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
