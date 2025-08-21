@@ -1,0 +1,274 @@
+sig oCloud {
+	var clusters : set Cluster,
+	inventory : set Resource,
+	ims : one IMS
+}
+
+sig Cluster {
+	var resources : set Resource,
+	var clusterId : lone ID
+}
+
+sig Resource {
+	var booked : set ID
+}
+
+sig ID {}
+
+sig Request {
+	payload : set Resource,
+	var status : one Response,
+	var id : lone ID
+}
+
+sig IMS {
+	cloud : one oCloud,
+	var inbox : set Request
+}
+
+one sig SMO {
+	var response : Request->Response
+}
+
+enum Response {
+	SUCCESS,
+	STALE,
+	BOOKING,
+	PROVISIONING,
+	ERROR
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	id' = id
+	clusters' = clusters
+	resources' = resources
+	booked' = booked
+	inbox' = inbox
+	response' = response
+	status' = status
+	clusterId' = clusterId
+}
+
+pred act {
+	some r : Request, c : oCloud | send_request[r, c] or generate_id[r, c] or book_resource[r, c] or deploy_resource[r, c] or clean_up[r, c]
+}
+
+// send creation request
+pred send_request [r : Request, c : oCloud]{
+
+	historically r not in c.ims.inbox//guard
+
+	inbox' = inbox + c.ims->r
+	
+	id' = id
+	clusters' = clusters
+	resources' = resources
+	booked' = booked
+	response' = response
+	status' = status
+	clusterId' = clusterId
+
+}
+
+// generate ID and attack it to the request
+pred generate_id [r : Request, c : oCloud] {
+
+	r in c.ims.inbox and r.status =  STALE //guard
+
+	(some identifier : ID | identifier not in {identifier : ID | identifier in c.ims.inbox.id or identifier in c.clusters.clusterId or identifier in c.inventory.booked} and id' = id + r->identifier)
+
+	status' = status - r->STALE + r->BOOKING
+
+	resources' = resources
+	booked' = booked
+	inbox' = inbox
+	response' = response
+	clusters' = clusters
+	clusterId' = clusterId
+
+}
+
+// Book all resources if sufficent free resources exist
+pred book_resource [r : Request, c : oCloud] {
+
+	r in c.ims.inbox and r.status = BOOKING//guard
+	
+	r.payload in {resource : Resource | resource in c.inventory and no resource.booked and resource not in Cluster.resources} implies 
+		booked' = booked + {resource : Resource | resource in r.payload}->r.id and
+		status' = status - r->BOOKING  + r->PROVISIONING
+	else 
+		booked' = booked and
+		status' = status - r->BOOKING  + r->ERROR
+
+	id' = id
+	clusters' = clusters
+	resources' = resources
+	inbox' = inbox
+	response' = response
+	clusterId' = clusterId
+
+}
+
+// Provison all booked resources
+pred deploy_resource [r : Request, c : oCloud] {
+
+	r in c.ims.inbox and r.status = PROVISIONING//guard
+
+	no ({resource : Resource | resource in r.payload} & Cluster.resources) implies(
+	(some cl : Cluster | cl not in oCloud.clusters and 
+		clusters' = clusters + c->cl and 
+		clusterId' = clusterId + cl->r.id and
+		resources' = resources + cl->{resource : Resource | resource.booked = r.id and resource in c.inventory} and
+		status'= status - r->PROVISIONING + r->SUCCESS)
+	)
+	else (
+		clusters' = clusters and
+		clusterId' = clusterId and
+		resources' = resources and
+		status'= status - r->PROVISIONING + r->ERROR
+	)
+
+	id' = id
+	booked' = booked
+	response' = response
+	inbox' = inbox
+
+}
+
+// Upon success or failure, remove the request from IMS
+pred clean_up [r : Request, c : oCloud] {
+	
+	r in c.ims.inbox and (r.status = ERROR or r.status = SUCCESS)//guard
+
+	id ' = id - r->r.id
+
+	r.status = ERROR implies(
+		booked' = booked - {resource : Resource | resource in r.payload}->r.id 
+	) else (
+		booked' = booked
+	)
+
+	inbox' = inbox - c.ims->r
+
+	status' = status - r->r.status + r->STALE
+
+	clusters' = clusters
+	resources' = resources
+	response' = response
+	clusterId' = clusterId
+}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (act or stutter)
+}
+
+fact one_ims_per_cloud {
+	all disj a,b : oCloud | no (a.ims & b.ims)
+}
+
+fact disjoint_inboxes {
+	always (all disj a,b : IMS | no (a.inbox & b.inbox))
+}
+
+fact cloud_manager_pointers {
+	all i : IMS, c : oCloud | i in c.ims <=> c in i.cloud
+}
+
+fact init {
+	no SMO.response and no IMS.inbox
+	no Request.id 
+	all r : Request | no r.id and r.status = STALE and some r.payload
+	all r : Resource | no r.booked
+	all c : Cluster | no c.resources and no c.clusterId
+	all c : oCloud | no c.clusters 
+//	all disj a,b : oCloud | no (a.inventory & b.inventory)
+	oCloud.inventory = Resource
+}
+
+// If a resource is booked, it must eventually be in a cluster
+fact booked_implies_provisioned{
+	always (all r : Resource | some r.booked implies eventually r in Cluster.resources)
+}
+
+fact processed_requests_are_terminated {
+	always (all r : Request | (r.status = ERROR  or r.status = SUCCESS) implies eventually (some c : oCloud| clean_up[r, c]))
+}
+
+fact test {
+	(all r : Request | some c : oCloud | eventually clean_up[r, c])
+	all c : oCloud | some c.inventory
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// no two clusters can share a single resource
+assert clusters_are_disjoint{
+	always (all disj a,b : Cluster | no (a.resources & b.resources))
+}
+
+// Once booked, a resource never changes booking ID
+assert booked_never_changes {
+	always (all r : Resource | some r.booked implies some identifier : ID | r.booked = identifier and always r.booked = identifier)
+}
+
+// A created cluster is never empty
+assert never_empty_cluster {
+	always (all c : Cluster | c in oCloud.clusters implies some c.resources)
+}
+
+// IIf there are insufficent resources to fufill a request, then the request eventually fails
+assert insufficient_resources_implies_error {
+	always (all r : Request | r in IMS.inbox and r.payload not in {resource : Resource | some c : oCloud | r in c.ims.inbox and resource in c.inventory and no resource.booked and resource not in Cluster.resources} implies eventually r.status = ERROR)
+}
+
+// No two clutsers have the same cluster ID.
+assert ids_are_locally_unique {
+	always (all disj a,b : Cluster | (some c : oCloud | (a + b) in c.clusters implies no (a.clusterId & b.clusterId)))
+}
+
+// If two resources are in the same cloud but different clusters, then they must be associated with different IDs.
+assert resources_in_different_clusters_have_different_ids {
+	always (all disj a,b : Resource | (some cl : oCloud | (a+b) in cl.inventory) and (b in Cluster.resources and some c : Cluster | (a in c.resources and b not in c.resources)) implies no (a.booked & b.booked))
+}
+
+// All provisioned resources must have an ID matching there parent Cluster
+assert resource_id_matches_cluster {
+	always (all r : Resource, c : Cluster | r in c.resources => r.booked = c.clusterId)
+}
+
+// If we have two identical requests sent at the same time, then one must fail.
+assert two_identical_requests_implies_one_fails {
+	always (all a,b : Request | a.payload = b.payload and (some ims : IMS | (a+b) in ims.inbox) and a.status = STALE and b.status = STALE implies eventually one {r : Request | r in (a+b) and r.status=SUCCESS})
+}
+
+// This should reveal a counter-example, the system allows for two clusters in different clouds to have the same ID.
+assert id_not_globally_unique {
+	always (all disj a,b : Cluster |(a + b) in oCloud.clusters implies no (a.clusterId & b.clusterId))
+}
+
+assert provisioned_implies_cluster {
+	always (all c : oCloud | (all r : Resource, cl : Cluster | r in c.inventory and r in cl.resources implies cl in c.clusters))
+}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+check provisioned_implies_cluster for 3 but exactly 2 oCloud, exactly 1 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check clusters_are_disjoint for 3 but exactly 2 oCloud, exactly 3 Resource, exactly 2 Cluster, exactly 2 Request, exactly 1 ID, 20 steps
+//check booked_never_changes for 3 but exactly 1 oCloud, exactly 4 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check never_empty_cluster for 3 but exactly 1 oCloud, exactly 4 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check insufficient_resources_implies_error  for 3 but exactly 2 oCloud, exactly 3 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 30 steps
+//check ids_are_locally_unique  for 3 but exactly 2 oCloud, exactly 3 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check resource_id_matches_cluster for 3 but exactly 2 oCloud, exactly 3 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 10 steps
+//check resources_in_different_clusters_have_different_ids for 3 but exactly 1 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check two_identical_requests_implies_one_fails for 3 but exactly 1 oCloud, exactly 1 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check  id_not_globally_unique for 3 but exactly 2 oCloud, exactly 3 Resource, exactly 2 Cluster, exactly 2 Request, exactly 1 ID, 20 steps
+
+
+run {} for 3 but exactly 2 oCloud, exactly 1 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
