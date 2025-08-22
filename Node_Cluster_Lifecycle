@@ -1,0 +1,269 @@
+sig oCloud {
+	var clusters : set Cluster,
+	ims : one IMS,
+	inventory : set Resource
+}
+
+sig Cluster {
+	var clusterId : lone ID,
+	var resources : set Resource
+}
+
+sig ID {}
+
+sig IMS {
+	cloud: one oCloud,
+	var inbox : set Request
+}
+
+sig Resource {
+	var booked : set ID
+}
+
+sig Request {
+	payload : set Resource,
+	var status : one Response,
+	var id : lone ID
+}
+
+enum Response {
+	SUCCESS,
+	STALE,
+	BOOKING,
+	PROVISIONING,
+	ERROR
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	clusters' = clusters
+	resources' = resources
+	booked' = booked
+	inbox' = inbox
+	status' = status
+	clusterId' = clusterId
+	id' = id
+}
+
+pred act {
+	some r : Request, c : oCloud | send_request[r, c] 
+						or generate_id[r, c] 
+						or book_resource[r, c]
+						or deploy_resource[r, c] 
+						or delete[r,c] 
+						or clean_up[r, c]
+}
+
+// send creation request
+pred send_request [r : Request, c : oCloud]{
+
+	(no r.id and historically r not in c.ims.inbox) or (some r.id and once r in c.ims.inbox)//guard
+
+	inbox' = inbox + c.ims->r
+	
+	id' = id
+	clusters' = clusters
+	resources' = resources
+	booked' = booked
+	status' = status
+	clusterId' = clusterId
+
+}
+
+// Generate ID and attach it to the request
+pred generate_id [r : Request, c : oCloud] {
+
+	r in c.ims.inbox and r.status =  STALE and no r.id//guard
+
+	(some identifier : ID | identifier not in {identifier : ID | identifier in c.ims.inbox.id or identifier in c.clusters.clusterId or identifier in c.inventory.booked} and id' = id + r->identifier)
+
+	status' = status - r->STALE + r->BOOKING
+
+	resources' = resources
+	booked' = booked
+	inbox' = inbox
+	clusters' = clusters
+	clusterId' = clusterId
+
+}
+
+// Book all resources given sufficient resources. Insufficeint resources should throw an error.
+pred book_resource [r : Request, c : oCloud] {
+
+	r in c.ims.inbox and r.status = BOOKING//guard
+	
+	r.payload in {resource : Resource | resource in c.inventory and no resource.booked and resource not in Cluster.resources} implies 
+		booked' = booked + {resource : Resource | resource in r.payload}->r.id and
+		status' = status - r->BOOKING  + r->PROVISIONING
+	else 
+		booked' = booked and
+		status' = status - r->BOOKING  + r->ERROR
+
+	id' = id
+	clusters' = clusters
+	resources' = resources
+	clusterId' = clusterId
+	inbox' = inbox
+
+}
+
+// Provison all booked resources given sufficient resources still exist. 
+pred deploy_resource [r : Request, c : oCloud] {
+
+	r in c.ims.inbox and r.status = PROVISIONING//guard
+
+	no ({resource : Resource | resource in r.payload} & Cluster.resources) implies(
+	(some cl : Cluster | cl not in oCloud.clusters and 
+		clusters' = clusters + c->cl and 
+		clusterId' = clusterId + cl->r.id and
+		resources' = resources + cl->{resource : Resource | resource.booked = r.id and resource in c.inventory} and
+		status'= status - r->PROVISIONING + r->SUCCESS)
+	)
+	else (
+		clusters' = clusters and
+		clusterId' = clusterId and
+		resources' = resources and
+		status'= status - r->PROVISIONING + r->ERROR
+	)
+
+	id' = id
+	booked' = booked
+	inbox' = inbox
+
+}
+
+// Upon success or failure, remove the request from IMS inbox and clean up relavant resources
+pred clean_up [r : Request, c : oCloud] {
+	
+	r in c.ims.inbox and (r.status = ERROR or r.status = SUCCESS)//guard
+
+	r.id not in c.clusters.clusterId implies (
+		id ' = id - r->r.id
+	)else(
+		id'= id
+	)
+		
+	(r.status = ERROR and r.id in c.clusters.clusterId) implies(
+		booked' = booked - {resource : Resource | resource in r.payload}->r.id 
+	) else (
+		booked' = booked
+	)
+
+	inbox' = inbox - c.ims->r
+
+	status' = status - r->r.status + r->STALE
+
+	clusters' = clusters
+	resources' = resources
+	clusterId' = clusterId
+}
+
+// If a delete request corresponds to a valid cluster, delete such cluster. If not, throw an error.
+pred delete [r : Request, c : oCloud] {
+
+	r in c.ims.inbox and r.status = STALE and some r.id//guard
+
+	r.id in c.clusters.clusterId implies (
+		some cl : Cluster | cl.clusterId = r.id and cl in c.clusters and
+			clusters' = clusters - c->cl and
+			clusterId' = clusterId - cl->r.id and
+			booked' = booked - {resource : Resource | resource in cl.resources}->r.id and
+			resources' = resources - cl->cl.resources and
+			status' = status - r->STALE + r->SUCCESS
+	)
+	else(
+		clusters' = clusters and
+		clusterId' = clusterId and
+		booked' = booked and
+		resources' = resources and
+		status' = status - r->STALE + r->ERROR
+	)
+
+	id'=id
+	inbox' = inbox
+
+}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (act or stutter)
+}
+
+// No two clouds can share an IMS
+fact one_ims_per_cloud {
+	all disj a,b : oCloud | no (a.ims & b.ims)
+}
+
+fact disjoint_inboxes {
+	always (all disj a,b : IMS | no (a.inbox & b.inbox))
+}
+
+fact cloud_manager_pointers {
+	all i : IMS, c : oCloud | i in c.ims <=> c in i.cloud
+}
+
+fact init {
+	no IMS.inbox
+	all r : Request | r.status = STALE and some r.payload
+	all r : Resource | no r.booked
+	all c : Cluster | no c.resources and no c.clusterId
+	all c : oCloud | no c.clusters 
+	all disj a,b : oCloud | no (a.inventory & b.inventory)
+	no Request.id
+	oCloud.inventory = Resource
+}
+
+fact test {
+//	eventually (all r : Request | r.status = SUCCESS or r.status = ERROR)
+}
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Clusters never share resources. If a cluster is active, it must have some provisioned resource
+assert disjointness_and_non_empty {
+	always (all disj a,b : Cluster | no (a.resources & b.resources) and all c : Cluster | c in oCloud.clusters implies some c.resources) 
+}
+
+// For a cluster to be deleted, there must exist a successful delete request that matched the cluster's ID within the hosting clouds inbox. That is, clusters don't dissapear without request.
+assert cluster_is_removed_due_to_successful_request {
+	always (all cl : Cluster | (some c : oCloud | before cl in c.clusters and cl not in c.clusters implies (some r : Request | r.status = SUCCESS and (before r.id = cl.clusterId) and r in c.ims.inbox)))
+}
+
+//Deletion of a cluster implies cluster ID removed, all resources unprovisioned, and all resources unbooked
+assert deletion_cleans_resources {
+	always (all cl : Cluster | before cl in oCloud.clusters and cl not in oCloud.clusters implies no cl.resources and no cl.clusterId and (all r : Resource | (before r in cl.resources) implies no r.booked))
+}
+
+// No two clusters can share a resource
+assert cluster_disjointness {
+	always (all disj a,b : Cluster | no (a.resources & b.resources))
+}
+
+// Actice clusters contain at least one provisioned resource
+assert cluster_non_empty {
+	always (all cl : Cluster | cl in oCloud.clusters implies some cl.resources)
+}
+
+// No two clutsers in the same cloud have the same Cluster ID.
+assert clusterId_locally_unique {
+	always (all disj a,b : Cluster | (all c : oCloud | (a+b) in c.clusters) implies no (a.clusterId & b.clusterId))
+}
+
+// Should reveal a counter-example
+assert clusterId_globally_unique {
+	always (all disj a, b : Cluster | no (a.clusterId & b.clusterId) )
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//check cluster_disjointness for 3 but exactly 1 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check  cluster_non_empty for 3 but exactly 1 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check clusterId_locally_unique for 3 but exactly 1 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check clusterId_globally_unique for 3 but exactly 2 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 1 ID, 20 steps
+//check cluster_is_removed_due_to_successful_request for 3 but exactly 1 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check deletion_cleans_resources for 3 but exactly 1 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check disjointness_and_non_empty for 3 but exactly 1 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+
+run {} for 3 but exactly 2 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
