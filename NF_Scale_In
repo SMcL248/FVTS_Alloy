@@ -1,0 +1,139 @@
+sig oCloud {
+	dms : one DMS,
+	nodes : set oCloudNode,
+	var pool : set Resource
+}
+
+enum Response {
+	OK,
+	ERROR
+}
+
+sig Resource {}
+
+	
+sig DMS {
+	cloud : one oCloud,
+	var requests : set Request
+}
+
+sig Request {
+	target : one oCloud,
+	payload : one NF
+}
+
+one sig SMO {
+	var response_inbox : set Request->Response
+}
+
+sig oCloudNode {
+	var deployment : set NF
+}
+
+sig NF {
+	var resources: set Resource
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	deployment' = deployment 
+	requests' = requests
+	response_inbox' = response_inbox
+	resources' = resources
+	pool' = pool
+}
+
+
+pred act {
+	some r : Request |
+				     initiate_scale_in[r] or
+			             finish_scale_in[r]
+}
+
+pred initiate_scale_in [r : Request] {
+
+	r.payload in r.target.nodes.deployment//guard
+
+	requests' = requests + r.target.dms->r
+
+	deployment' = deployment 
+	response_inbox' = response_inbox
+	resources' = resources
+	pool' = pool
+}
+
+pred finish_scale_in[r : Request] {
+	
+	r in r.target.dms.requests//guard
+
+	requests' = requests - r.target.dms->r
+
+	some r.payload.resources implies(
+		some resource : Resource | resource in r.payload.resources and 
+							  resources' = resources - r.payload->resource and
+							  pool' = pool + r.target->resource and
+							  response_inbox' = response_inbox + SMO->r->OK
+	)
+	else(
+		resources' = resources and
+		pool' = pool and 
+		response_inbox' = response_inbox + SMO->r->ERROR
+	)
+	
+	deployment' = deployment
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (act or stutter)
+}
+
+fact init {	
+	all nf : NF | (some r : Request | r.payload = nf) 
+	some Resource
+	some NF.resources
+	all r : Resource | r in oCloud.pool or r in NF.resources
+	all node : oCloudNode | node in oCloud.nodes
+	all nf : NF | nf in oCloudNode.deployment
+	no SMO.response_inbox
+	all d : DMS | no d.requests
+	all disj a,b : oCloud | no (a.nodes & b.nodes) and no (a.pool & b.pool)
+	all disj a,b : NF | no (a.resources & b.resources)
+}
+
+fact unique_cloud_properties {
+	all disj a,b : oCloud | a.dms != b.dms
+}
+
+fact link_managers_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
+}	
+
+fact test {
+//	always (all r : Request | r in DMS.requests implies eventually r not in DMS.requests)
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+assert processed_request_yields_response {
+	always (all r : Request | (before r in DMS.requests and r not in DMS.requests) implies (r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox))
+}
+
+assert disjoint_resources {
+	always (all disj a,b : NF | no (a.resources & b.resources))
+}
+
+assert insufficient_resources_implies_failure {
+	always (all r : Request | (r in r.target.dms.requests and no r.payload.resources) implies eventually r->ERROR in SMO.response_inbox)
+}
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//check disjoint_resources for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, exactly 5 Resource, 20 steps
+//check processed_request_yields_response for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, exactly 5 Resource, 20 steps
+//check insufficient_resources_implies_failure for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, exactly 5 Resource, 20 steps
+
+run {} for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 1 NF, 20 steps
