@@ -1,0 +1,136 @@
+sig oCloud {
+	dms : one DMS,
+	var resources : set Resource
+}
+	
+sig DMS {
+	cloud : one oCloud,
+	var requests : set Request
+}
+
+one sig SMO {
+	var inbox : set Request,
+	var responses: set Request->Response
+}
+
+sig Resource {
+	var deployment : lone NF
+}
+
+sig NF {}
+
+sig Request {
+	target : one oCloud,
+	payload : one NF
+}
+
+enum Response {
+	SUCCESS, 
+	ERROR
+}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	deployment' = deployment 
+	resources' = resources
+	requests' = requests
+	responses' = responses
+}
+
+pred act {
+	some r : Request, c : oCloud | initiate_termination[r] or finish_termination[r,c]
+}
+
+
+// If a request is present, we assume that all precondtions are met and the request is sent to the appropriate DMS.
+pred initiate_termination [r : Request] {
+	
+	r.payload in Resource.deployment and r not in DMS.requests//guard
+
+	requests' = requests + r.target.dms->r
+
+	deployment' = deployment 	
+	resources' = resources
+	responses' = responses
+}
+
+
+// Finish deployment, delete request, send appropriate response.
+pred finish_termination [r : Request, c : oCloud] {
+
+	r in c.dms.requests//guard
+
+	requests' = requests - c.dms->r
+
+	(r.payload in c.resources.deployment) implies (
+		some resource : Resource | r.payload in resource.deployment and deployment' = deployment - resource->r.payload and responses' = responses + SMO->r->SUCCESS
+	)else(
+		deployment' = deployment and responses' = responses + SMO->r->ERROR
+	)	
+
+	resources' = resources
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (stutter or act)
+}
+
+fact disj_NF {
+	all disj a,b : Request | a.payload != b.payload
+}
+
+fact init {
+	some oCloud.resources
+	some Resource.deployment
+	no SMO.inbox and no SMO.responses
+	all d : DMS | no d.requests
+	all r : Resource | some r.deployment implies r in oCloud.resources
+	all disj a,b : Resource | no (a.deployment & b.deployment)
+}
+
+fact unique_cloud_properties {
+	all disj a,b : oCloud | a.dms != b.dms
+}
+
+fact link_manageresources_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
+}
+
+fact test{
+//	eventually (some r : Request | r->ERROR in SMO.responses)
+	eventually (all r : Request | before r in DMS.requests and r not in DMS.requests)
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+assert fail_case_ends_in_error_message {
+	always (all r : Request | (r in r.target.dms.requests and r.payload not in r.target.resources.deployment) implies eventually r->ERROR in SMO.responses)
+}
+
+assert success_case_ends_in_success_message {
+	always (all r : Request | (r in r.target.dms.requests and r.payload in r.target.resources.deployment) implies eventually r->SUCCESS in SMO.responses)
+}
+
+assert processed_request_implies_response {
+	always (all r : Request | before r in DMS.requests and r not in DMS.requests implies eventually r->SUCCESS in SMO.responses or r->ERROR in SMO.responses)
+}
+
+assert disjoint_nfs {
+	always (all disj a,b : Resource | no (a.deployment & b.deployment))
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//check fail_case_ends_in_error_message for 3 but exactly 2 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Resource, 20 steps
+//check success_case_ends_in_success_message for 3 but exactly 2 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Resource, 20 steps
+//check disjoint_nfs for 3 but exactly 2 oCloud, exactly 3 NF, exactly 2 Request, exactly 3 Resource, 20 steps
+//check processed_request_implies_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Resource, 20 steps
+
+run {} for 3 but exactly 2 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Resource, 20 steps
+
+
+
