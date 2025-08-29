@@ -1,103 +1,115 @@
-// Developed from O-RAN-WG6.ORCH-USE-CASES-R004-v13.00 clause 3.2.1 - NF Deployment Instantiation
-// We assume:
-//     - SMO is healthy and available
-//     - O-Clouds are installed and registered
-//     - All nodes are instantiated
-//     - Connectivity exists between the O-Cloud and SMO
-
-// This process descibes the deployment of a Network Function (NF) upon an O-Cloud. 
-// Initially, I was concerned that a deployment request could be sent to the DMS even when there does not exist 
-// the resources to deploy the NF. This would cause an unexpected error case not specified.
-// However, the preconditions of the process state:
-//     - Requirements of deployment have been homed. (We have determined an appropriate place for deployment)
-//     - Cluster has been provisioned by IMS to support the NF deployments. (Such targered O-Cloud has been prepared for deployment)
-
-// In the code below, we simulate the SMO receiving DeploymentDescriptors (Info of a NF deployment). 
-// This will only be acted upon assumuing that the O-Cloud has the available resources.
-// This property has been formally verified with the use of an assertion. 
-
 sig oCloud {
-	ims : one IMS,
 	dms : one DMS,
-	guid : one GUID,
-	var nodes : set oCloudNode
+	var nodes : set Node
 }
-
-abstract sig Manager {
-	cloud : one oCloud
-}
-
-sig IMS extends Manager {}
 	
-sig DMS extends Manager {
-	var deployment_requests : set NF
+sig DMS {
+	cloud : one oCloud,
+	var requests : set Request
 }
-
-sig GUID {}
 
 one sig SMO {
-	var inbox : set DeploymentDescriptor
+	var responses: set Request->Response
 }
 
-sig oCloudNode {
-	var deployment : lone NF
+sig Node {
+	var deployment : set NF
 }
 
 sig NF {}
 
-sig DeploymentDescriptor {
+sig Request {
 	target : one oCloud,
-	payload : one NF
+	payload : one NF,
+	var underlying_error : lone Response,
+	var processed : lone Response
+}
+
+enum Response {
+	SUCCESS, 
+	ERROR
 }
 
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 pred stutter {
-	inbox' = inbox 
 	deployment' = deployment 
 	nodes' = nodes
-	deployment_requests' = deployment_requests
+	requests' = requests
+	responses' = responses
+	underlying_error' = underlying_error
+	processed' = processed
 }
 
 pred act {
-	some dd : DeploymentDescriptor | send_dd[dd] or initiate_deployment[dd] or finish_deployment[dd]
+	some r : Request, c : oCloud | initiate_deployment[r] or finish_deployment[r,c] or sim_error[r,c] or response[r, c]
 }
 
-pred send_dd [dd : DeploymentDescriptor] {
-
-	historically dd not in SMO.inbox //guard
+// If a request is present, we assume that all precondtions are met and the request is sent to the appropriate DMS.
+pred initiate_deployment [r : Request] {
 	
-	inbox' = inbox + SMO->dd
+	historically r not in r.target.dms.requests and some r.target.nodes//guard
 
-	deployment' = deployment 
-	nodes' = nodes
-	deployment_requests' = deployment_requests
-}
-
-pred initiate_deployment [dd : DeploymentDescriptor] {
-	
-	dd in SMO.inbox and some node : oCloudNode | node in dd.target.nodes and no node.deployment//guard
-
-	inbox' = inbox - SMO->dd
-
-	deployment_requests' = deployment_requests + dd.target.dms->dd.payload
+	requests' = requests + r.target.dms->r
 
 	deployment' = deployment 	
 	nodes' = nodes
-	
+	responses' = responses
+	underlying_error' = underlying_error
+	processed' = processed
 }
 
-pred finish_deployment [dd : DeploymentDescriptor] {
+// Simulate some configuation error
+pred sim_error [r : Request, c : oCloud] {
 
-	dd.payload in dd.target.dms.deployment_requests //guard
+	r in c.dms.requests and no r.underlying_error//guard
 
-	deployment_requests' = deployment_requests - dd.target.dms->dd.payload
+	underlying_error' = underlying_error + r->SUCCESS or underlying_error' = underlying_error + r->ERROR
 
-	some node : oCloudNode | (node in dd.target.nodes and no node.deployment) and deployment' = deployment + node->dd.payload
+	deployment' = deployment 
+	nodes' = nodes
+	requests' = requests
+	responses' = responses
+	processed' = processed
+}
 
-	inbox' = inbox 
-	nodes' = nodes	
+// Finish deployment, delete request, send appropriate response.
+pred finish_deployment [r : Request, c : oCloud] {
+
+	r in c.dms.requests and some r.underlying_error//guard
+
+	(r.underlying_error = SUCCESS) implies (
+		some node : Node | node in c.nodes and deployment' = deployment + node->r.payload and processed' = processed + r->SUCCESS
+	)else(
+		deployment' = deployment and processed' = processed+ r->ERROR
+	)	
+
+	requests' = requests
+	responses' = responses
+	nodes' = nodes
+	underlying_error' = underlying_error
+}
+
+//Send a response to the SMO
+pred response [r : Request, c : oCloud] {
+
+	r in c.dms.requests and some r.processed//guard
+
+	requests' = requests - c.dms->r
+		
+	(r.processed = SUCCESS) implies(
+		responses' = responses + SMO->r->SUCCESS
+	)else( 
+		responses' = responses + SMO->r->ERROR
+	)
+
+	processed' = processed - r->r.processed
+	underlying_error' = underlying_error - r->r.underlying_error
+
+	nodes' = nodes
+	deployment' = deployment 
+	
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -107,40 +119,82 @@ fact act_or_stutter {
 }
 
 fact disj_NF {
-	all disj a,b : DeploymentDescriptor | a.payload != b.payload
-	all dd : DeploymentDescriptor | dd.payload not in oCloudNode.deployment
+//	all disj a,b : Request | a.payload != b.payload
+	all r : Request | r.payload not in Node.deployment
 }
 
 fact init {
 	all c : oCloud | some c.nodes
-	all node : oCloudNode | no node.deployment
-	no SMO.inbox
-	all d : DMS | no d.deployment_requests
+	all node : Node | no node.deployment
+	all r : Request |  no r.underlying_error and no r.processed
+	no SMO.responses
+	all d : DMS | no d.requests
 }
 
 fact unique_cloud_properties {
-	all disj a,b : oCloud | a.ims != b.ims and a.dms != b.dms and a.guid != b.guid
+	all disj a,b : oCloud | a.dms != b.dms
 }
 
-fact link_managers_with_correct_cloud {
-	all d : DMS, c : oCloud | d.cloud = c implies c.dms = d
-	all i : IMS, c : oCloud | i.cloud = c implies c.ims = i
+fact link_manageresources_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
 }
 
-fact no_unused_managers {
-	all m : Manager | some m.cloud
-}	
+// force all requests to be handled.
+fact test{
+	all r : Request | eventually (before r in DMS.requests and r not in DMS.requests)
+}
 
-// Here we check that the request for NF deployment is only made assuming a free node.
-assert deployment_request_implies_free_resources {
-	always (all dd : DeploymentDescriptor | dd.payload in dd.target.dms.deployment_requests implies
-		 some node : oCloudNode | node in dd.target.nodes and no node.deployment
-	)
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// As the sequence describes no exceptions, we can assume that sent requests imply eventual success. 
+assert preconditions_imply_success {
+	always (all r : Request | r in DMS.requests implies eventually r->SUCCESS in SMO.responses)
+}
+
+assert added_node_implies_successful_request {
+	always (all nf : NF | (before nf not in Node.deployment and nf in Node.deployment) implies eventually some r : Request | r.payload = nf and r->SUCCESS in SMO.responses)
+}
+
+assert processed_request_implies_response {
+	always (all r : Request | before r in DMS.requests and r not in DMS.requests implies (r->ERROR in SMO.responses or r->SUCCESS in SMO.responses))
+}
+
+assert response_implies_added_node {
+	always (all r : Request | (r->SUCCESS in SMO.responses) implies (once r.payload not in Node.deployment) and r.payload in Node.deployment)
+}
+
+assert all_sent_response_eventually_processed {
+	always (some r : Request | r in DMS.requests implies eventually some r.processed)
+}
+
+assert deployment_implies_error_message {
+	always (all r : Request | r.underlying_error = ERROR implies eventually r->ERROR in SMO.responses)
+}
+
+//liveness
+assert unsuccessful_deployment_implies_never_deployed {
+	always (all nf : NF | once (some r : Request | r.payload = nf and r->ERROR in SMO.responses) => nf not in Node.deployment)
+}
+
+//liveness
+assert NF_deployed_twice_allowed {
+	always (all disj a,b : Request | a.payload = b.payload => eventually lone {r : Request | r in (a+b) and (r->SUCCESS in SMO.responses)})
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-//run {} for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 DeploymentDescriptor, exactly 1 oCloudNode
+//check preconditions_imply_success for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Resource
+//check request_always_has_valid_cloud  for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Resource
+//check added_node_implies_successful_request for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check processed_request_implies_response for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check all_sent_response_eventually_processed for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check response_implies_added_node for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check deployment_implies_error_message for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+check unsuccessful_deployment_implies_never_deployed for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+check NF_deployed_twice_allowed for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
 
-check deployment_request_implies_free_resources for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 DeploymentDescriptor, exactly 1 oCloudNode
+run {} for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+
+
 
