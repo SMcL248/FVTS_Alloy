@@ -1,0 +1,194 @@
+sig oCloud {
+	dms : one DMS,
+	var nodes : set Node,
+	var pool : set Resource
+}
+	
+sig DMS {
+	cloud : one oCloud,
+	var requests : set Request
+}
+
+one sig SMO {
+	var responses: set Request->Response
+}
+
+sig Node {
+	var deployment : set NF
+}
+
+sig Resource {}
+
+sig NF {
+	resources : set Resource	
+}
+
+sig Request {
+	operation: one Operation,
+	target : one oCloud,
+	payload : one NF
+}
+
+enum Response {
+	SUCCESS, 
+	ERROR
+}
+
+enum Operation {
+	ADD,
+	DELETE
+//	OUT,
+//	IN
+}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	
+	deployment' = deployment 
+	nodes' = nodes
+	requests' = requests
+	responses' = responses
+	resources' = resources
+	pool' = pool
+
+}
+
+pred act {
+	some r : Request, c : oCloud | initiate_deployment[r] or finish_deployment[r,c] or initiate_termination[r] or finish_termination[r,c]
+}
+
+// If a request is present, we assume that all precondtions are met and the request is sent to the appropriate DMS.
+pred initiate_deployment [r : Request] {
+	
+	r.payload not in Node.deployment and r.operation = ADD//guard
+
+	requests' = requests + r.target.dms->r
+
+	deployment' = deployment 	
+	nodes' = nodes
+	responses' = responses
+	resources' = resources
+	pool' = pool
+}
+
+// Finish deployment, delete request, send appropriate response.
+pred finish_deployment [r : Request, c : oCloud] {
+
+	r in c.dms.requests and r.operation = ADD//guard
+
+	requests' = requests - c.dms->r
+
+	some resource : Node | resource in c.nodes and deployment' = deployment + resource->r.payload and responses' = responses + SMO->r->SUCCESS
+
+	nodes' = nodes
+	resources' = resources
+	pool' = pool
+}
+
+// If a request is present, we assume that all precondtions are met and the request is sent to the appropriate DMS.
+pred initiate_termination [r : Request] {
+	
+	r.payload in Node.deployment and r not in DMS.requests and r.operation = DELETE//guard
+
+	requests' = requests + r.target.dms->r
+
+	deployment' = deployment 	
+	nodes' = nodes
+	responses' = responses
+	resources' = resources
+	pool' = pool
+
+}
+
+
+// Finish deployment, delete request, send appropriate response.
+pred finish_termination [r : Request, c : oCloud] {
+
+	r in c.dms.requests and r.operation = DELETE//guard
+
+	requests' = requests - c.dms->r
+
+	(r.payload in c.nodes.deployment) implies (
+		some node : Node | r.payload in node.deployment and 
+			deployment' = deployment - node->r.payload and 
+			responses' = responses + SMO->r->SUCCESS and
+			pool' = pool + r.target->r.payload.resources and
+			resources' = resources - r.payload->r.payload.resources
+
+	)else(
+		deployment' = deployment and
+		responses' = responses + SMO->r->ERROR and
+		pool'= pool and
+		resources' = resources
+	)	
+
+	nodes' = nodes
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (stutter or act)
+}
+
+fact init {
+	all c : oCloud | some c.nodes and some c.pool
+	all node : Node | no node.deployment and node in oCloud.nodes
+	no SMO.responses
+	all d : DMS | no d.requests
+	no NF.resources
+}
+
+fact unique_cloud_properties {
+	all disj a,b : oCloud | a.dms != b.dms
+}
+
+fact link_managenodes_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
+}
+
+fact test {
+	eventually (all r : Request | once r in DMS.requests and eventually r not in DMS.requests)
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// All processed requests imply an SMO response
+assert requests_end_in_response {
+	always (all r : Request | before r in DMS.requests and r not in DMS.requests implies r->SUCCESS in SMO.responses or r->ERROR in SMO.responses)
+}
+
+// Nf are only deployed upon request
+assert deployed_NF_imply_add_request {
+	always (all nf : NF | nf in Node.deployment implies some r : Request | r.payload = nf and r.operation = ADD and r->SUCCESS in SMO.responses)
+}
+
+// NF are only terminated upon request
+assert terminated_NF_imply_delete_request {
+	always (all nf : NF | (before nf in Node.deployment and nf not in Node.deployment) implies (some r : Request | r.payload = nf and r.operation = DELETE and r->SUCCESS in SMO.responses))
+}
+
+// Liveness condition, expect a counterexample as we want this behaviour
+assert terminated_NF_cannot_be_redeployed {
+	always (all nf : NF | (before nf in Node.deployment and nf not in Node.deployment) implies always nf not in Node.deployment)
+}
+
+//NF Termination implies resources are deallocated and put into available pool
+assert termination_implies_resource_deallocation {
+	always (all r : Request | (before r in DMS.requests and r not in DMS.requests) => no r.payload.resources and {re : Resource | before re in r.payload.resources} in oCloud.pool)
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//check deployed_NF_imply_add_request for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check terminated_NF_imply_delete_request  for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check terminated_NF_cannot_be_redeployed for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+check termination_implies_resource_deallocation for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+check requests_end_in_response for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+
+run {} for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node
+
+
+
