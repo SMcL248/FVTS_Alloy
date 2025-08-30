@@ -10,12 +10,11 @@ sig DMS {
 }
 
 one sig SMO {
-	var inbox : set Request,
 	var responses: set Request->Response
 }
 
 sig Node {
-	var deployment : lone NF
+	var deployment : set NF
 }
 
 sig NF {
@@ -26,7 +25,8 @@ sig Resource {}
 
 sig Request {
 	target : one oCloud,
-	payload : one NF
+	payload : one NF,
+	var processed : lone Response
 }
 
 enum Response {
@@ -44,10 +44,11 @@ pred stutter {
 	responses' = responses
 	resources' = resources
 	pool' = pool
+	processed' = processed
 }
 
 pred act {
-	some r : Request, c : oCloud | initiate_termination[r] or finish_termination[r,c]
+	some r : Request, c : oCloud | initiate_termination[r] or finish_termination[r,c] or send_response[r,c]
 }
 
 
@@ -63,31 +64,45 @@ pred initiate_termination [r : Request] {
 	responses' = responses
 	resources' = resources
 	pool' = pool
+	processed' = processed
 }
 
 
 // Finish deployment, delete request, send appropriate response.
 pred finish_termination [r : Request, c : oCloud] {
 
-	r in c.dms.requests//guard
-
-	requests' = requests - c.dms->r
+	r in c.dms.requests and no r.processed//guard
 
 	(r.payload in c.nodes.deployment) implies (
 		some node : Node | r.payload in node.deployment and 
 			deployment' = deployment - node->r.payload and 
-			responses' = responses + SMO->r->SUCCESS and
+			processed' = processed+ r->SUCCESS and
 			pool' = pool + r.target->r.payload.resources and
 			resources' = resources - r.payload->r.payload.resources
 
 	)else(
 		deployment' = deployment and
-		responses' = responses + SMO->r->ERROR and
+		processed' = processed + r->ERROR and
 		pool'= pool and
 		resources' = resources
 	)	
 
+	requests' = requests
 	nodes' = nodes
+}
+
+pred send_response [r : Request, c : oCloud] {
+
+	r in c.dms.requests and some r.processed//guard
+
+	requests' = requests - c.dms->r
+	responses' = responses + SMO->r->r.processed
+	processed' = processed - r->r.processed
+
+	deployment' = deployment 
+	nodes' = nodes
+	resources' = resources
+	pool' = pool
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -102,11 +117,12 @@ fact disj_NF {
 
 fact init {
 	no (oCloud.pool & NF.resources)
+	no Request.processed
 	some oCloud.pool
 	some NF.resources
 	some oCloud.nodes
 	some Node.deployment
-	no SMO.inbox and no SMO.responses
+	no SMO.responses
 	all d : DMS | no d.requests
 	all node : Node | some node.deployment implies node in oCloud.nodes
 	all nf : NF | some nf.resources implies nf in Node.deployment
@@ -123,13 +139,13 @@ fact link_managenodes_with_correct_cloud {
 
 fact test{
 //	eventually (some r : Request | r->ERROR in SMO.responses)
-	eventually (all r : Request | before r in DMS.requests and r not in DMS.requests)
+	all r : Request | eventually (before r in DMS.requests and r not in DMS.requests)
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 assert fail_case_ends_in_error_message {
-	always (all r : Request | (r in r.target.dms.requests and r.payload not in r.target.nodes.deployment) implies eventually r->ERROR in SMO.responses)
+	always (all r : Request | (r in r.target.dms.requests and r.processed = ERROR and r.payload not in r.target.nodes.deployment) implies eventually r->ERROR in SMO.responses)
 }
 
 assert success_case_ends_in_success_message {
@@ -137,7 +153,7 @@ assert success_case_ends_in_success_message {
 }
 
 assert fail_case_ends_in_no_removal {
-	always (all r : Request | (r in r.target.dms.requests and r.payload not in r.target.nodes.deployment) implies eventually r.payload in Node.deployment)
+	always (all r : Request | (r in r.target.dms.requests and no r.processed and r.payload not in r.target.nodes.deployment) implies eventually r.payload in Node.deployment)
 }
 
 assert success_case_ends_in_removal {
@@ -145,7 +161,7 @@ assert success_case_ends_in_removal {
 }
 
 assert processed_request_implies_response {
-	always (all r : Request | before r in DMS.requests and r not in DMS.requests implies eventually r->SUCCESS in SMO.responses or r->ERROR in SMO.responses)
+	always (some r : Request | before r in DMS.requests and r not in DMS.requests implies eventually r->SUCCESS in SMO.responses or r->ERROR in SMO.responses)
 }
 
 assert disjoint_nfs {
@@ -153,20 +169,38 @@ assert disjoint_nfs {
 }
 
 assert termination_implies_resource_deallocation {
-	always (all r : Request | (before r in DMS.requests and r not in DMS.requests) implies no r.payload.resources and {re : Resource | before re in r.payload.resources} in oCloud.pool)
+	always (some r : Request | (r.processed = SUCCESS) => no r.payload.resources and {re : Resource | before re in r.payload.resources} in oCloud.pool)
 }
+
+assert request_never_sent_if_NF_not_deployed {
+	always (some r : Request | before r not in DMS.requests and r in DMS.requests implies r.payload in Node.deployment)
+}
+
+assert processed_state_matches_response {
+	always (all r : Request | r.processed = ERROR implies eventually r->ERROR in SMO.responses)
+	always (all r : Request | r.processed = SUCCESS implies eventually r->SUCCESS in SMO.responses)
+}
+
+assert not_deployed_implies_no_resoures {
+	always (all nf : NF | nf not in Node.deployment => no nf.resources)
+}
+
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-//check fail_case_ends_in_error_message for 3 but exactly 2 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 node, 20 steps
-//check success_case_ends_in_success_message for 3 but exactly 2 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 node, 20 steps
-//check disjoint_nfs for 3 but exactly 2 oCloud, exactly 3 NF, exactly 2 Request, exactly 3 node, 20 steps
-//check processed_request_implies_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 node, 20 steps
-//check fail_case_ends_in_no_removal for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
-check success_case_ends_in_removal for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
-check termination_implies_resource_deallocation for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
+//check fail_case_ends_in_error_message for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, 20 steps
+//check success_case_ends_in_success_message for 3 but exactly 2 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, 20 steps
+//check disjoint_nfs for 3 but exactly 2 oCloud, exactly 3 NF, exactly 2 Request, exactly 3 Node, 20 steps
+//check processed_request_implies_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, 20 steps
+check fail_case_ends_in_no_removal for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
+//check success_case_ends_in_removal for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
+//check successful_request_leads_to_success_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, exactly 1 Resource, 20 steps
+//check failed_request_leads_to_failed_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, exactly 1 Resource, 20 steps
+//check termination_implies_resource_deallocation for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, exactly 2 Resource, 20 steps
+//check request_never_sent_if_NF_not_deployed for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, exactly 1 Resource, 20 steps
+check not_deployed_implies_no_resoures for 3 but exactly 1 oCloud, exactly 3 NF, exactly 2 Request, exactly 1 Node, exactly 3 Resource, 20 steps
 
-run {} for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
+run {} for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, exactly 2 Resource, 20 steps
 
 
 
