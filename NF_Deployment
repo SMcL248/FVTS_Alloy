@@ -74,7 +74,7 @@ pred sim_error [r : Request, c : oCloud] {
 	processed' = processed
 }
 
-// Finish deployment, delete request, send appropriate response.
+// Deploy NF.
 pred finish_deployment [r : Request, c : oCloud] {
 
 	r in c.dms.requests and some r.underlying_error//guard
@@ -94,16 +94,10 @@ pred finish_deployment [r : Request, c : oCloud] {
 //Send a response to the SMO
 pred response [r : Request, c : oCloud] {
 
-	r in c.dms.requests and some r.processed//guard
+	r in c.dms.requests and r.processed = SUCCESS//guard
 
 	requests' = requests - c.dms->r
-		
-	(r.processed = SUCCESS) implies(
-		responses' = responses + SMO->r->SUCCESS
-	)else( 
-		responses' = responses + SMO->r->ERROR
-	)
-
+	responses' = responses + SMO->r->r.processed
 	processed' = processed - r->r.processed
 	underlying_error' = underlying_error - r->r.underlying_error
 
@@ -139,9 +133,10 @@ fact link_manageresources_with_correct_cloud {
 	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
 }
 
-// force all requests to be handled.
-fact test{
-	all r : Request | eventually (before r in DMS.requests and r not in DMS.requests)
+// force all requests to eventual enter and leave the requests relation.
+fact fairness{
+	(all r : Request | eventually (before r in DMS.requests and r not in DMS.requests))
+//	Node in oCloud.nodes	
 }
 
 
@@ -152,7 +147,7 @@ assert preconditions_imply_success {
 	always (all r : Request | r in DMS.requests implies eventually r->SUCCESS in SMO.responses)
 }
 
-assert added_node_implies_successful_request {
+assert added_nf_implies_successful_request {
 	always (all nf : NF | (before nf not in Node.deployment and nf in Node.deployment) implies eventually some r : Request | r.payload = nf and r->SUCCESS in SMO.responses)
 }
 
@@ -182,19 +177,36 @@ assert NF_deployed_twice_allowed {
 	always (all disj a,b : Request | a.payload = b.payload => eventually lone {r : Request | r in (a+b) and (r->SUCCESS in SMO.responses)})
 }
 
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//liveness
+assert NF_not_in_two_locations {
+	always all disj a,b : Node | no (a.deployment & b.deployment)
+}
 
-//check preconditions_imply_success for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Resource
+//liveness	
+assert hardware_can_host_multiple_NFs {
+	always (all node : Node | lone {nf : NF | nf in node.deployment})
+}
+
+assert successful_process_implies_successful_response {
+	always (all r : Request | r.processed = SUCCESS implies eventually r->SUCCESS in SMO.responses)
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	
+check preconditions_imply_success for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node
 //check request_always_has_valid_cloud  for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Resource
 //check added_node_implies_successful_request for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
 //check processed_request_implies_response for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
 //check all_sent_response_eventually_processed for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
 //check response_implies_added_node for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
 //check deployment_implies_error_message for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
-check unsuccessful_deployment_implies_never_deployed for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
-check NF_deployed_twice_allowed for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check unsuccessful_deployment_implies_never_deployed for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check NF_deployed_twice_allowed for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 2 Node, 20 steps
+//check NF_not_in_two_locations for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 2 Node, 20 steps
+//check successful_process_implies_successful_response for 3 but exactly 1 oCloud, exactly 3 NF, exactly 3 Request, exactly 3 Node, 20 steps
+//check hardware_can_host_multiple_NFs for 3 but exactly 1 oCloud, exactly 3 NF, exactly 3 Request, exactly 3 Node, 20 steps	
 
-run {} for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 1 Node, 20 steps
+run {} for 3 but exactly 1 oCloud, exactly 3 NF, exactly 2 Request, exactly 3 Node, 20 steps
 
 
 
