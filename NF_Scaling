@@ -26,7 +26,8 @@ sig DMS {
 sig Request {
 	operation : one Operation,
 	target : one oCloud,
-	payload : one NF
+	payload : one NF,
+	var status : lone Response
 }
 
 one sig SMO {
@@ -49,6 +50,7 @@ pred stutter {
 	response_inbox' = response_inbox
 	resources' = resources
 	pool' = pool
+	status' = status
 }
 
 
@@ -56,12 +58,15 @@ pred act {
 	some r : Request |
 				     initiate[r] or
 			             finish_scale_out[r] or
-				     finish_scale_in[r]
+				     finish_scale_in[r] or
+				    smo_response[r]
 }
 
+
+// Send a scaling request to DMS
 pred initiate [r : Request] {
 
-	 historically r not in r.target.dms.requests and r.payload in r.target.nodes.deployment //guard
+	 historically r not in r.target.dms.requests and r.payload in r.target.nodes.deployment//guard
 
 	requests' = requests + r.target.dms->r
 
@@ -69,51 +74,70 @@ pred initiate [r : Request] {
 	response_inbox' = response_inbox
 	resources' = resources
 	pool' = pool
+	status' = status
 	
 }
 
+// Attempt scale out
 pred finish_scale_out[r : Request] {
 	
-	r.operation = OUT and r in r.target.dms.requests//guard
-
-	requests' = requests - r.target.dms->r
+	r.operation = OUT and r in r.target.dms.requests and no r.status//guard
 
 	(some r.target.pool) implies(
 		some resource : Resource | resource in r.target.pool and
 							   resources' = resources + r.payload->resource and
 							   pool' = pool - r.target->resource and
-							   response_inbox' = response_inbox +SMO->r->OK
+							   status' = status + r->OK
 	)
 	else(
 		resources' = resources and
 		pool' = pool and
-		response_inbox' = response_inbox + SMO->r->ERROR
+		status' = status + r->ERROR
 	)
-	
-	deployment' = deployment 
+		
+	response_inbox' = response_inbox
+	deployment' = deployment
+	requests' = requests
 }
 
 
+// Attempt Scale In
 pred finish_scale_in[r : Request] {
 	
-	r.operation = IN and r in r.target.dms.requests//guard
-
-	requests' = requests - r.target.dms->r
+	r.operation = IN and r in r.target.dms.requests and no r.status//guard
 
 	(some r.payload.resources) implies(
 		some resource : Resource | resource in r.payload.resources and 
 							  resources' = resources - r.payload->resource and
 							  pool' = pool + r.target->resource and
-							  response_inbox' = response_inbox + SMO->r->OK
+							  status' = status + r->OK
 	)
 	else(
 		resources' = resources and
 		pool' = pool and 
-		response_inbox' = response_inbox + SMO->r->ERROR
+		status' = status + r->ERROR
 	)
-	
+
+	response_inbox' = response_inbox
 	deployment' = deployment
+	requests' = requests
 }
+
+
+// Send appropriate response to SMO based upon success of operation
+pred smo_response [r : Request]{
+
+	r in r.target.dms.requests and some r.status//guard
+
+	requests' = requests - r.target.dms->r
+	response_inbox' = response_inbox + SMO->r->r.status
+	status' = status - r->r.status
+
+	deployment' = deployment 
+	resources' = resources
+	pool' = pool
+}
+
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 fact act_or_stutter {
@@ -122,14 +146,15 @@ fact act_or_stutter {
 
 fact init {	
 	all nf : NF | some r : Request | r.payload = nf
+	all r : Request | no r.status
 	some Resource
+	some Request
 	all r : Resource | r in oCloud.pool
 	all node : oCloudNode | node in oCloud.nodes
 	all nf : NF | nf in oCloudNode.deployment and no nf.resources
 	no SMO.response_inbox
 	all d : DMS | no d.requests
 	all disj a,b : oCloud | no (a.nodes & b.nodes) and no (a.pool & b.pool)
-	all o : Operation | some r : Request | r.operation = o
 }
 
 fact unique_cloud_properties {
@@ -140,29 +165,44 @@ fact link_managers_with_correct_cloud {
 	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
 }	
 
-fact test {
-//	eventually (all r : Request | r->OK in SMO.response_inbox)
+// All requests must result in SMO response
+fact fairness {
+	eventually (all r : Request | r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox)
 }
+
+// Show error and SMO response are compatible
+//fact error_allows_progression {
+//	eventually (some r : Request | (before ERROR in r.status) and r->ERROR in SMO.response_inbox)
+//}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+// (Safety) Processed Requets imply present response
 assert processed_request_yields_response {
 	always (all r : Request | (before r in DMS.requests and r not in DMS.requests) implies (r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox))
 }
 
+// (Safety) Under the assumption that an allocated resource cannot be allocated to another NF Deployment
 assert disjoint_resources {
 	always (all disj a,b : NF | no (a.resources & b.resources))
 }
 
-// Liveness condition
+// (Liveness) we would expect that a deallocated node should be able to be reallocated later.
 assert deallocateed_never_reallocated {
 	always (all r : Resource | once (before r in NF.resources and r not in NF.resources) implies (r in oCloud.pool))
+}
+
+// (Safety) Correct repsonse is posted to SMO
+assert correct_responses {
+	always (all r : Request | ((before ERROR in r.status and ERROR not in r.status) implies r->ERROR in SMO.response_inbox) and 
+		  ((before OK in r.status and OK not in r.status) implies r->OK in SMO.response_inbox))
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 //check disjoint_resources for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, exactly 5 Resource, 20 steps
-//check processed_request_yields_response for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, exactly 5 Resource, 20 steps
-//check deallocateed_never_reallocated for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, 20 steps
+//check processed_request_yields_response for 3
+//check deallocateed_never_reallocated for 3
+//check correct_responses for 5
 
-run {} for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, 20 steps
+run {} for 3
