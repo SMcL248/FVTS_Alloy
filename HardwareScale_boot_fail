@@ -36,10 +36,10 @@ pred act {
 	some node : oCloudNode, c : oCloud | expansion_request[node, c]  or send_config_request[node,c] or process_config_request[node, c] or boot[node, c]
 }
 
-// simulates the decision by the CloudInstaller to hardware scale a guven O-Cloud
+// simulates the decision  of an operator to hardware scale a given O-Cloud
 pred expansion_request [node : oCloudNode, c : oCloud]{
 	
-	node not in oCloud.nodes//guard
+	node not in c.nodes//guard
 
 	inbox' = inbox + CloudInstaller->node->c
 
@@ -48,7 +48,7 @@ pred expansion_request [node : oCloudNode, c : oCloud]{
 	boot' = boot
 }
 
-// simulates the interaction between the node to be added and the target clouds IMS
+// simulates the IMS receiving word of the hardware scale.
 pred send_config_request [node : oCloudNode, c : oCloud] {
 	
 	node->c in CloudInstaller.inbox //guard
@@ -60,24 +60,24 @@ pred send_config_request [node : oCloudNode, c : oCloud] {
 	boot' = boot
 }
 
-// process request
+// IMS waits for notification of successful boot
 pred process_config_request [node : oCloudNode, c : oCloud] {
 	
 	node->c in c.ims.config_request and some node.boot//guard
 
-	config_request' = config_request - c.ims->node->c
-
 	(node.boot = SUCCESS) implies(
-		nodes' =nodes + c->node
+		nodes' = nodes + c->node and
+		config_request' = config_request - c.ims->node->c
 	)else(
-		nodes' = nodes
+		nodes' = nodes and
+		config_request' = config_request
 	)
 
 	inbox' = inbox
 	boot' = boot
 }
 
-// sim node booting
+// simulate node boot success or failure
 pred boot [node : oCloudNode, c : oCloud] {
 
 	node->c in c.ims.config_request and no node.boot//guard 
@@ -88,7 +88,6 @@ pred boot [node : oCloudNode, c : oCloud] {
 	nodes' = nodes
 	config_request' = config_request
 }
-
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -111,11 +110,48 @@ fact link_managers_with_correct_cloud {
 	all i : IMS, c : oCloud | i.cloud = c <=> c.ims = i
 }
 
-assert all_instantiated_nodes_booted {
-	always (all node : oCloudNode, c : oCloud | (before node->c in c.ims.config_request and node->c not in c.ims.config_request) implies node in c.nodes)
+// liveness condition - should return no valid trace. That is, no Node that has failed to boot exists in Deployed nodes.
+fact error_in_deployment {
+	eventually (some n : oCloudNode, c : oCloud | FAILED in n.boot and (before n->c in c.ims.config_request and n->c not in c.ims.config_request))//failure and request completion
+}
+
+fact fairness {
+	eventually(all n : oCloudNode | once (some o: oCloud | (before n->o in IMS.config_request and n->o not in IMS.config_request)))
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//Liveness (Violated) - should produce counter-example showing system progression, doesn't
+assert error_prevents_completion {
+	always (all n : oCloudNode | (some ims : IMS, c : oCloud | (FAILED in n.boot) implies (n->c in ims.config_request))) //failed boot never allows request to complete
+}
+
+//Liveness (Violated) (with fairness) - no counter example, that is, restricting trace such that all requests complete, means no error can occur.
+assert failure {
+	always (all node : oCloudNode | FAILED not in node.boot)
+}
+
+//Safety (Validated) - produces no counter-example as expected
+assert deployment_implies_success_boot {
+	always (all n : oCloudNode | (n in oCloud.nodes) implies (SUCCESS in n.boot))
+}
+
+//Safety - (Validated) - produces no counter-example
+assert process_request_implies_deployment {
+	always(all node : oCloudNode, c :oCloud | (before node->c in c.ims.config_request and node->c not in c.ims.config_request) implies node in c.nodes) // request procssed => node in deployment
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-check all_instantiated_nodes_booted for 3 but exactly 1 oCloud, exactly 1 oCloudNode
+//check failure for 3
+//check  error_prevents_completion for 3
+//check deployment_implies_success_boot for 3
+//check process_request_implies_deployment for 3
+
+
+run {} for 3 
+
+
+
+
 
