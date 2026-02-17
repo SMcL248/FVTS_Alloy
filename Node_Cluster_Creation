@@ -6,7 +6,8 @@ sig oCloud {
 
 sig Cluster {
 	var resources : set Resource,
-	var clusterId : lone ID
+	var clusterId : lone ID,
+	var dms_endpoint : lone DMS
 }
 
 sig Resource {
@@ -25,6 +26,8 @@ sig IMS {
 	cloud : one oCloud,
 	var inbox : set Request
 }
+
+sig DMS {}
 
 one sig SMO {
 	var response : Request->Response
@@ -49,6 +52,7 @@ pred stutter {
 	response' = response
 	status' = status
 	clusterId' = clusterId
+	dms_endpoint' = dms_endpoint
 }
 
 pred act {
@@ -69,10 +73,11 @@ pred send_request [r : Request, c : oCloud]{
 	response' = response
 	status' = status
 	clusterId' = clusterId
+	dms_endpoint' = dms_endpoint
 
 }
 
-// generate ID and attack it to the request
+// generate ID and attach it to the request
 pred generate_id [r : Request, c : oCloud] {
 
 	r in c.ims.inbox and r.status =  STALE //guard
@@ -87,6 +92,7 @@ pred generate_id [r : Request, c : oCloud] {
 	response' = response
 	clusters' = clusters
 	clusterId' = clusterId
+	dms_endpoint' = dms_endpoint
 
 }
 
@@ -108,6 +114,7 @@ pred book_resource [r : Request, c : oCloud] {
 	inbox' = inbox
 	response' = response
 	clusterId' = clusterId
+	dms_endpoint' = dms_endpoint
 
 }
 
@@ -134,6 +141,7 @@ pred deploy_resource [r : Request, c : oCloud] {
 	booked' = booked
 	response' = response
 	inbox' = inbox
+	dms_endpoint' = dms_endpoint
 
 }
 
@@ -142,21 +150,26 @@ pred clean_up [r : Request, c : oCloud] {
 	
 	r in c.ims.inbox and (r.status = ERROR or r.status = SUCCESS)//guard
 
-	id ' = id - r->r.id
-
 	r.status = ERROR implies(
-		booked' = booked - {resource : Resource | resource in r.payload}->r.id 
+		booked' = booked - {resource : Resource | resource in r.payload and resource in c.inventory}->r.id 
 	) else (
 		booked' = booked
 	)
 
-	inbox' = inbox - c.ims->r
+	r.status = SUCCESS implies (
+		some dms : DMS, cluster : Cluster | cluster.clusterId = r.id and dms_endpoint' =  dms_endpoint + cluster->dms
+	)
+	else(
+		dms_endpoint' = dms_endpoint
+	)
 
+	id ' = id - r->r.id
+	inbox' = inbox - c.ims->r
+	response' = response + SMO->r->r.status
 	status' = status - r->r.status + r->STALE
 
 	clusters' = clusters
 	resources' = resources
-	response' = response
 	clusterId' = clusterId
 }
 
@@ -186,22 +199,9 @@ fact init {
 	all r : Resource | no r.booked
 	all c : Cluster | no c.resources and no c.clusterId
 	all c : oCloud | no c.clusters 
-//	all disj a,b : oCloud | no (a.inventory & b.inventory)
+ 	all disj a,b : oCloud | no (a.inventory & b.inventory)
 	oCloud.inventory = Resource
-}
-
-// If a resource is booked, it must eventually be in a cluster
-fact booked_implies_provisioned{
-	always (all r : Resource | some r.booked implies eventually r in Cluster.resources)
-}
-
-fact processed_requests_are_terminated {
-	always (all r : Request | (r.status = ERROR  or r.status = SUCCESS) implies eventually (some c : oCloud| clean_up[r, c]))
-}
-
-fact test {
-	(all r : Request | some c : oCloud | eventually clean_up[r, c])
-	all c : oCloud | some c.inventory
+	
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -226,16 +226,19 @@ assert insufficient_resources_implies_error {
 	always (all r : Request | r in IMS.inbox and r.payload not in {resource : Resource | some c : oCloud | r in c.ims.inbox and resource in c.inventory and no resource.booked and resource not in Cluster.resources} implies eventually r.status = ERROR)
 }
 
-// No two clutsers have the same cluster ID.
+
+// Safety - No two clutsers have the same cluster ID.
 assert ids_are_locally_unique {
 	always (all disj a,b : Cluster | (some c : oCloud | (a + b) in c.clusters implies no (a.clusterId & b.clusterId)))
 }
 
+//Safety
 // If two resources are in the same cloud but different clusters, then they must be associated with different IDs.
 assert resources_in_different_clusters_have_different_ids {
 	always (all disj a,b : Resource | (some cl : oCloud | (a+b) in cl.inventory) and (b in Cluster.resources and some c : Cluster | (a in c.resources and b not in c.resources)) implies no (a.booked & b.booked))
 }
 
+//Safety
 // All provisioned resources must have an ID matching there parent Cluster
 assert resource_id_matches_cluster {
 	always (all r : Resource, c : Cluster | r in c.resources => r.booked = c.clusterId)
@@ -255,10 +258,43 @@ assert provisioned_implies_cluster {
 	always (all c : oCloud | (all r : Resource, cl : Cluster | r in c.inventory and r in cl.resources implies cl in c.clusters))
 }
 
+assert created_cluster_has_dms_endpoint {
+	always (all cl : Cluster | some cl.resources implies eventually some cl.dms_endpoint)
+}
+
+assert deploying_stage_implies_success {
+	always (all r : Request | r.status = PROVISIONING implies eventually r.status = SUCCESS)
+}
+
+// liveness
+assert success {
+	always (all r : Request | r->SUCCESS not in SMO.response)
+}
+
+// liveness
+assert failure {
+	always (all r : Request | r->ERROR not in SMO.response)
+}
+
+//safety
+assert success_response_implies_resources_in_cluster{
+	always (all r : Request | r->SUCCESS in SMO.response implies some cl : Cluster | (r.payload in cl.resources))
+}
+
+//liveness
+assert only_one_cluster_per_oCloud {
+	always (all c : oCloud | lone {cl : Cluster | cl in c.clusters})
+}
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-check provisioned_implies_cluster for 3 but exactly 2 oCloud, exactly 1 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+check only_one_cluster_per_oCloud
+check success_response_implies_resources_in_cluster
+//check failure
+check success
+check deploying_stage_implies_success for 3 but exactly 1 oCloud, exactly 1 Resource, exactly 1 Cluster, exactly 1 Request, exactly 1 ID, 20 steps 
+//check created_cluster_has_dms_endpoint for 3 but exactly 1 oCloud, exactly 1 Resource, exactly 1 Cluster, exactly 1 Request, exactly 1 ID, 20 steps 
+//check provisioned_implies_cluster for 3 but exactly 2 oCloud, exactly 1 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
 //check clusters_are_disjoint for 3 but exactly 2 oCloud, exactly 3 Resource, exactly 2 Cluster, exactly 2 Request, exactly 1 ID, 20 steps
 //check booked_never_changes for 3 but exactly 1 oCloud, exactly 4 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
 //check never_empty_cluster for 3 but exactly 1 oCloud, exactly 4 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
@@ -270,5 +306,5 @@ check provisioned_implies_cluster for 3 but exactly 2 oCloud, exactly 1 Resource
 //check  id_not_globally_unique for 3 but exactly 2 oCloud, exactly 3 Resource, exactly 2 Cluster, exactly 2 Request, exactly 1 ID, 20 steps
 
 
-run {} for 3 but exactly 2 oCloud, exactly 1 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+run {} for 3 but exactly 1 oCloud, exactly 1 Resource, exactly 1 Cluster, exactly 1 Request, exactly 1 ID, 20 steps
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
