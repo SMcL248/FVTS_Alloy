@@ -59,20 +59,18 @@ pred stutter {
 	status' = status
 }
 
-
 pred act {
 	(some r : UpdateRequest |
 		initiate_update[r] or
 		deploy_update[r] or
 		sim_update[r] or
 		evaluate_update[r]
-	) or(
+	)or(
 	some re : Request |
 		finish_deployment[re] or
 		finish_termination[re]
 	)
 }
-
 
 pred finish_deployment [r : Request] {
 
@@ -86,6 +84,7 @@ pred finish_deployment [r : Request] {
 	pool' = pool
 	update_request' = update_request 
 	status' = status
+
 }
 
 pred finish_termination [r : Request] {
@@ -101,6 +100,7 @@ pred finish_termination [r : Request] {
 
 	update_request' = update_request 
 	status' = status
+
 }
 
 pred initiate_update [r : UpdateRequest] {
@@ -115,6 +115,7 @@ pred initiate_update [r : UpdateRequest] {
 	resources' = resources
 	pool' = pool
 	status' = status
+
 }
 
 pred deploy_update [r : UpdateRequest] {
@@ -180,7 +181,7 @@ fact init {
 	no (oCloud.pool & NF.resources)
 	all node : oCloudNode | node in oCloud.nodes
 	no SMO.response_inbox and no SMO.update_request
-	all r : UpdateRequest | no r.status and (r.existing != r.desired)
+	all r : UpdateRequest | no r.status and (r.existing != r.desired) and r.desired not in oCloudNode.deployment and r.existing in oCloudNode.deployment
 	all d : DMS | no d.requests
 	some UpdateRequest
 	some oCloudNode.deployment
@@ -188,6 +189,7 @@ fact init {
 	all nf : NF | nf not in oCloudNode.deployment implies no nf.resources
 	all disj a,b : oCloudNode | no(a.deployment & b.deployment)
 	all disj a,b : Request | a.operation = b.operation and a.target = b.target implies a.payload != b.payload
+	all disj a,b : UpdateRequest | a.existing != b.existing and a.desired != b.desired and a.desired != b.existing and a.existing != b.desired
 }
 
 fact unique_cloud_properties {
@@ -198,52 +200,84 @@ fact link_managers_with_correct_cloud {
 	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
 }	
 
-fact test {
-	always (all r : Request | r in DMS.requests implies eventually r not in DMS.requests)
-	always (all r : UpdateRequest | r in SMO.update_request implies eventually r not in SMO.update_request)
-	eventually (all r : UpdateRequest | once r in SMO.update_request )
-//	eventually(all r : UpdateRequest | before r in SMO.update_request and r not in SMO.update_request) //Eventually, all update requests are processed
-	all disj a,b : UpdateRequest | a.existing != b.existing and a.desired != b.desired and a.desired != b.existing and a.existing != b.desired
-}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-
+//safety
 assert update_request_processed_implies_termination {
 	always (all r : UpdateRequest | (before r in SMO.update_request and r not in SMO.update_request) implies some re : Request | re in DMS.requests and (re.payload = r.existing or re.payload = r.desired) and re.operation = DELETE)
 }
 
-assert reuqests_sent_to_the_correct_place {
+//safety
+assert requests_sent_to_the_correct_place {
 	always (all r : Request | r in r.target.dms.requests and r.operation = DELETE implies r.payload in r.target.nodes.deployment)
 	always (all r : Request | r in r.target.dms.requests and r.operation = ADD implies r.payload not in r.target.nodes.deployment)
 }
 
+//safety
 assert process_requests_imply_response {
 	always (all r : Request | (before r in DMS.requests and r not in DMS.requests) implies (r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox))
 }
 
+//safety
 assert only_one_NF_remains {
-	always (all r : UpdateRequest | r.status = ERROR implies eventually (r.desired not in oCloudNode.deployment and r.existing in oCloudNode.deployment))
-	always (all r : UpdateRequest | r.status = OK implies eventually (r.existing not in oCloudNode.deployment and r.desired in oCloudNode.deployment))
+	always (all r : UpdateRequest | (once r.desired in oCloudNode.deployment and r.desired not in oCloudNode.deployment and r.existing in oCloudNode.deployment) implies once r.status = ERROR)
+	always (all r : UpdateRequest | (r.existing not in oCloudNode.deployment and r.desired in oCloudNode.deployment) implies once r.status = OK)
 }
 
+//safety
 assert update_idea_implies_conditions_for_update {
 	always (all r : UpdateRequest | (before r not in SMO.update_request and r in SMO.update_request) implies r.desired not in oCloudNode.deployment and r.existing in oCloudNode.deployment)
 }	
 
+//safety
 assert terminated_NF_imply_deallocated_resources {
 	always (all nf : NF | (before nf in oCloudNode.deployment and nf not in oCloudNode.deployment) implies no nf.resources and {resource : Resource| before resource in nf.resources} in oCloud.pool)
 }
 
+//liveness
+assert success {
+	always (all ur : UpdateRequest | ur.status != OK)
+}
+
+//liveness
+assert failure {
+	always (all ur : UpdateRequest | ur.status != ERROR)	
+}
+
+//liveness
+assert desired_and_exisitng_on_same_node {
+	always (all disj a,b : NF | some ur : UpdateRequest | a in ur.desired and b in ur.existing and (a+b) in oCloudNode.deployment implies some node : oCloudNode | a in node.deployment and b in node.deployment)
+}
+
+// safety
+assert desired_and_exisiting_same_oCloud {
+	always (all ur : UpdateRequest | (ur.desired + ur.existing) in oCloudNode.deployment implies some c :oCloud | (ur.desired + ur.existing) in c.nodes.deployment)
+}
+
+// safety
+assert responses_imply_corresponding_action {
+	always (all r : Request | r->OK in SMO.response_inbox and r.operation = ADD implies once(r.payload in oCloudNode.deployment))
+	always (all r : Request | r->OK in SMO.response_inbox and r.operation = DELETE implies once(r.payload not in oCloudNode.deployment))
+}
+
+assert update_request_status_implies_both_deployed {
+	always (all ur : UpdateRequest | some ur.status implies (ur.desired + ur.existing) in oCloudNode.deployment)
+}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-//check update_request_processed_implies_termination for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 4 NF, exactly 8 Request, exactly 2 UpdateRequest, 20 steps
-//check reuqests_sent_to_the_correct_place for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, exactly 4 Request, exactly 2 UpdateRequest, 20 steps
-//check process_requests_imply_response for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, exactly 4 Request, exactly 2 UpdateRequest, 20 steps
-//check only_one_NF_remains for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 4 NF, exactly 8 Request, exactly 2 UpdateRequest, 20 steps
-//check terminated_NF_imply_deallocated_resources for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 4 NF, exactly 8 Request, exactly 2 UpdateRequest, 20 steps
-check update_idea_implies_conditions_for_update for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 4 NF, exactly 8 Request, exactly 2 UpdateRequest, 20 steps
+check desired_and_exisiting_same_oCloud
+//check desired_and_exisitng_on_same_node
+//check responses_imply_corresponding_action
+//check failure
+//check success
+//check update_request_processed_implies_termination
+//check requests_sent_to_the_correct_place
+//check process_requests_imply_response 
+//check only_one_NF_remains
+//check terminated_NF_imply_deallocated_resources
+//check update_idea_implies_conditions_for_update 
 
 
-run {} for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 4 NF, exactly 8 Request, exactly 2 UpdateRequest, 20 steps
+run {} for 3 
