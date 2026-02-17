@@ -66,7 +66,7 @@ pred act {
 // Send a scaling request to DMS
 pred initiate [r : Request] {
 
-	 historically r not in r.target.dms.requests and r.payload in r.target.nodes.deployment//guard
+	 r.payload in r.target.nodes.deployment//guard
 
 	requests' = requests + r.target.dms->r
 
@@ -151,11 +151,16 @@ fact init {
 	some Request
 	all r : Resource | r in oCloud.pool
 	all node : oCloudNode | node in oCloud.nodes
-	all nf : NF | nf in oCloudNode.deployment and no nf.resources
+	all nf : NF | nf in oCloudNode.deployment
 	no SMO.response_inbox
 	all d : DMS | no d.requests
 	all disj a,b : oCloud | no (a.nodes & b.nodes) and no (a.pool & b.pool)
 }
+
+// force initial state where there is a shared resource
+//fact shared_resource {
+//	some disj a,b : NF | one (a.resources & b.resources)
+//}
 
 fact unique_cloud_properties {
 	all disj a,b : oCloud | a.dms != b.dms
@@ -167,13 +172,14 @@ fact link_managers_with_correct_cloud {
 
 // All requests must result in SMO response
 fact fairness {
-	eventually (all r : Request | r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox)
+//	eventually (all r : Request | r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox)
 }
 
 // Show error and SMO response are compatible
-//fact error_allows_progression {
-//	eventually (some r : Request | (before ERROR in r.status) and r->ERROR in SMO.response_inbox)
-//}
+fact error_allows_progression {
+	eventually (some r : Request | (before ERROR in r.status and r.operation = IN) and r->ERROR in SMO.response_inbox)
+	eventually (some r : Request | (before ERROR in r.status and r.operation = OUT) and r->ERROR in SMO.response_inbox)
+}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -182,7 +188,17 @@ assert processed_request_yields_response {
 	always (all r : Request | (before r in DMS.requests and r not in DMS.requests) implies (r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox))
 }
 
-// (Safety) Under the assumption that an allocated resource cannot be allocated to another NF Deployment
+// (Safety) - If a resource is deallocated from a NF, then there should have existed a successful scale in request which targeted that NF
+assert resource_scale_out {
+		always (all r : Resource | (some nf : NF | r in nf.resources and r not in nf .resources implies once some re : Request | nf in re.payload and re.status = OK and re.operation = IN))
+}
+
+// (Liveness) - if a resource is shared, successful scale in still possib
+assert success_is_impossible {
+	always(all r : Request | r.operation = IN implies r.status != OK )
+}
+
+// (Liveness) Under the assumption that an allocated resource cannot be allocated to another NF Deployment
 assert disjoint_resources {
 	always (all disj a,b : NF | no (a.resources & b.resources))
 }
@@ -192,7 +208,17 @@ assert deallocateed_never_reallocated {
 	always (all r : Resource | once (before r in NF.resources and r not in NF.resources) implies (r in oCloud.pool))
 }
 
-// (Safety) Correct repsonse is posted to SMO
+// (liveness) - NF should be able to utilise mulitple resources.
+assert multiple_resources {
+	always (all nf : NF | lone {r : Resource | r in nf.resources})
+}
+
+// (Safety) - If a resource is in use, then there should have been a successful scale out request targeting this NF.
+assert scaling_implies_request {
+	always (all r : Resource | (some nf : NF | r in nf.resources implies once some re : Request | nf in re.payload and OK in re.status and OUT in re.operation))
+}
+
+// (Safety) Clearing of request status => SMO response
 assert correct_responses {
 	always (all r : Request | ((before ERROR in r.status and ERROR not in r.status) implies r->ERROR in SMO.response_inbox) and 
 		  ((before OK in r.status and OK not in r.status) implies r->OK in SMO.response_inbox))
@@ -200,9 +226,13 @@ assert correct_responses {
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-//check disjoint_resources for 3 but exactly 1 oCloud, exactly 1 oCloudNode, exactly 2 NF, exactly 5 Resource, 20 steps
+//check success_is_impossible for 3 but exactly 1 oCloud, exactly 1 Resource
+//check resource_scale_out for 3 but 20 steps
+//check disjoint_resources for 3
 //check processed_request_yields_response for 3
 //check deallocateed_never_reallocated for 3
+//check multiple_resources for 3
 //check correct_responses for 5
+//check scaling_implies_request for 3
 
 run {} for 3
