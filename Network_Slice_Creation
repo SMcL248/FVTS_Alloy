@@ -53,11 +53,7 @@ pred send_request [s : Slice] {
 
 	s not in oCloud.requests//guard
 
-	all c : oCloud | 
-		some (c.deployed & s.nfs) implies 
-			c.requests' = c.requests + s
-		else 
-			c.requests' = c.requests
+	requests' = requests + {c : oCloud | some (c.deployed & s.nfs)}->s
 
 	ids' = ids
 	available' = available
@@ -65,7 +61,6 @@ pred send_request [s : Slice] {
 	trunk' = trunk
 	deployed' = deployed
 	status' = status
-
 }
 
 pred allocate [s : Slice, c : oCloud] {
@@ -76,7 +71,7 @@ pred allocate [s : Slice, c : oCloud] {
 		some id : VLAN_ID | 
 			id in c.available and 
 			available' = available - c->id and 
-			(all nf : NF | nf in (s.nfs & c.deployed) implies nf.trunk' = nf.trunk + id else nf.trunk' = nf.trunk) and
+			trunk' = trunk + {nf : NF | nf in (s.nfs & c.deployed)}->id and
 			ids' = ids + s->c->id and
 			status' = status
 	)else(
@@ -117,10 +112,12 @@ pred catch_error [s : Slice] {
 	
 	s.status = ERROR and s in oCloud.requests//guard
 
-	all c : oCloud | s in c.requests implies c.requests' = c.requests - s else c.requests' = c.requests
+	requests' = requests - {c : oCloud | s in c.requests}->s
 
-	all c : oCloud, id : VLAN_ID | (all nf : NF | (c->id in s.ids and nf in c.deployed and id in nf.trunk) implies nf.trunk' = nf.trunk - id else nf.trunk' = nf.trunk) and
-		(c->id in s.ids implies (c.available' = c.available + id and s.ids' = s.ids - c->id) else (c.available' = c.available and s.ids' = s.ids))
+	all c : oCloud, id : VLAN_ID | c->id in s.ids and
+		trunk' = trunk - {nf : NF |nf in c.deployed and id in nf.trunk}->id and
+		available' = available + c->id and
+		 ids' = ids - s->c->id
 
 	response' = response + SMO->s->ERROR
 
@@ -133,7 +130,7 @@ pred catch_success [s : Slice] {
 
 	s.status = OK and (all nf : NF | nf in s.nfs implies (some c : oCloud, id : VLAN_ID | c->id in s.ids and nf in c.deployed and id in nf.trunk)) and s in oCloud.requests //guard
 
-	all c : oCloud | s in c.requests implies c.requests' = c.requests - s else c.requests' = c.requests
+	requests' = requests - {c : oCloud | s in c.requests}->s
 	
 	response' = response + SMO->s->OK
 
@@ -158,6 +155,8 @@ fact act_or_stutter {
 }
 
 fact init {
+	all disj a,b : oCloud | no (a.hardware & b.hardware)
+//	all disj a,b :oCloud | no (a.deployed & b.deployed)
 	all nf : NF | no nf.trunk
 	all c : oCloud | no c.requests and some c.hardware
 	no SMO.response
@@ -168,13 +167,65 @@ fact init {
 }
 
 fact temp {
-	all disj a,b : oCloud | no (a.deployed & b.deployed)
-	all disj a,b : Slice | some (a.nfs & b.nfs)
-	eventually (all s :Slice | s->OK in SMO.response)
+//	all disj a,b : oCloud | no (a.deployed & b.deployed)
+//	all disj a,b : Slice | some (a.nfs & b.nfs)
+//	eventually (all s :Slice | s->OK in SMO.response)
+//	all s : Slice | before s in oCloud.requests and s not in oCloud.requests
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Safety
+assert failure_implies_clean {
+	always (all s : Slice | s->ERROR in SMO.response implies no s.ids)
+}
+
+// Safety
+assert availbe_and_used_disjoint {
+	always (all c : oCloud, s : Slice | no c.available & {id : VLAN_ID | c->id in s.ids and id in c.deployed.trunk})
+}
+
+// Safety
+assert success_implies_deployment {
+	always (all s : Slice | once (s->OK in SMO.response) implies s.nfs in oCloud.deployed)
+}
+
+//liveness
+assert id_availabe_but_also_applied {
+	always (all c : oCloud | no (c.available & c.deployed.trunk))
+}
+
+// livness - success can happen
+assert success{
+	always (all s : Slice | s->OK not in SMO.response)
+}
+
+//liveness - failure may occur
+assert failure {
+	always (all s : Slice | s->ERROR not in SMO.response)
+}
+
+//liveness
+assert failure_may_have_NF_instatitated {
+	always (all s : Slice | s->ERROR in SMO.response implies all nf : NF | nf in s.nfs and nf not in oCloud.deployed)
+}
+
+//liveness
+assert multiple_clouds {
+	always (all disj a,b : NF | some s : Slice | a in s.nfs and b in s.nfs and s->OK in SMO.response implies some c : oCloud | a in c.deployed and b in c.deployed)
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-run {} for 3 but exactly 2 oCloud, exactly 3 NF, exactly 2 VLAN_ID, exactly 2 Slice, 20 steps
+//check multiple_clouds for 3 but exactly 2 oCloud
+//check success_implies_deployment for 3
+//check test for 3
+//check id_availabe_but_also_applied for 3 but exactly 1 VLAN_ID, exactly 2 oCloud, exactly 1 NF
+//check failure_may_have_NF_instatitated for 3
+//check failure_implies_clean for 3
+//check failure for 3
+//check success for 3
+
+run {} for 3 
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
