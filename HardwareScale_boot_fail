@@ -112,7 +112,7 @@ fact link_managers_with_correct_cloud {
 
 // liveness condition - should return no valid trace. That is, no Node that has failed to boot exists in Deployed nodes.
 fact error_in_deployment {
-	eventually (some n : oCloudNode, c : oCloud | FAILED in n.boot and (before n->c in c.ims.config_request and n->c not in c.ims.config_request))//failure and request completion
+//	eventually (some n : oCloudNode, c : oCloud | FAILED in n.boot and (before n->c in c.ims.config_request and n->c not in c.ims.config_request))//failure and request completion
 }
 
 fact fairness {
@@ -131,23 +131,52 @@ assert failure {
 	always (all node : oCloudNode | FAILED not in node.boot)
 }
 
-//Safety (Validated) - produces no counter-example as expected
+// Liveness (Validated) - aims to show that multiple nodes can be scaled into a O-Cloud instance.
+assert multiple_nodes {
+	always (all o : oCloud | lone {node : oCloudNode | node in o.nodes})
+}
+
+// Liveness (Validated) - aims to show that Nodes may be shared across O-Cloud instances.
+assert shared_nodes {
+	always (all disj a,b : oCloud | no (a.nodes & b.nodes))
+}
+
+// Safety (Validated) - Node only boots due to on-going hardware scale attempt
+assert boot_implies_request {
+	always (all node : oCloudNode | (before no node.boot and some node.boot) implies some c : oCloud | node->c in c.ims.config_request)
+}
+
+// Safety (Validated) - Node in deployment implies successful boot
 assert deployment_implies_success_boot {
 	always (all n : oCloudNode | (n in oCloud.nodes) implies (SUCCESS in n.boot))
 }
 
-//Safety - (Validated) - produces no counter-example
+// Safety (Validated) - with fairness, successful boot implies eventual deployment
+assert success_boot_implies_node_deployment {
+	always (all n : oCloudNode | (n.boot = SUCCESS) implies eventually n in oCloud.nodes)
+}
+
+// Safety (Validated) - If a configuration request is complete, the node must be in deployment.
 assert process_request_implies_deployment {
 	always(all node : oCloudNode, c :oCloud | (before node->c in c.ims.config_request and node->c not in c.ims.config_request) implies node in c.nodes) // request procssed => node in deployment
 }
 
+// Safey (Validated) - If IMS recieves config request, such a config plan must exist in the installer operator
+assert ims_request_implies_operator_request {
+	always (all node : oCloudNode, c : oCloud | node->c in IMS.config_request implies node->c in CloudInstaller.inbox)
+}
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+//check ims_request_implies_operator_request for 3
+//check boot_implies_request for 3
+//check shared_nodes for 3
+//check multiple_nodes for 3
+//check success_boot_implies_node_deployment for 3
 //check failure for 3
-//check  error_prevents_completion for 3
+check error_prevents_completion for 3 but 20 steps
 //check deployment_implies_success_boot for 3
 //check process_request_implies_deployment for 3
-
 
 run {} for 3 
 
