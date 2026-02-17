@@ -1,0 +1,294 @@
+sig oCloud {
+	dms : one DMS,
+	var nodes : set Node// Set of deployed worker nodes
+}
+	
+sig DMS {
+	cloud : one oCloud,
+	var requests : set Request // Set of received instantiation requests
+}
+
+one sig SMO {
+	var responses: set Request->Response// Set of request responses
+}
+
+sig Node {
+	var deployment : set NF// Set of NFs instantiatied on this machine
+}
+
+sig NF {}
+
+sig Request {
+	target : one oCloud, // O-Cloud for deployment
+	payload : one NF, // NF to deploy
+	var underlying_error : lone Response, //Does some non-descipt error occur?
+	var processed : lone Response,// Final response to SMO
+	required_resources : set Resource
+}
+
+sig Resource {
+	var associated_nf : lone NF
+}
+
+enum Response {
+	SUCCESS, 
+	ERROR
+}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pred stutter {
+	deployment' = deployment 
+	nodes' = nodes
+	requests' = requests
+	responses' = responses
+	underlying_error' = underlying_error
+	processed' = processed
+	associated_nf' = associated_nf
+}
+
+pred act {
+	some r : Request, c : oCloud | initiate_deployment[r] or finish_deployment[r,c] or sim_error[r,c] or response[r, c] or allocate_resource[r,c] or success[r,c]
+}
+
+// If a request is present, we assume that all precondtions are met and the request is sent to the appropriate DMS.
+pred initiate_deployment [r : Request] {
+	
+	historically r not in r.target.dms.requests and some r.target.nodes//guard
+
+	requests' = requests + r.target.dms->r
+
+	deployment' = deployment 	
+	nodes' = nodes
+	responses' = responses
+	underlying_error' = underlying_error
+	processed' = processed
+	associated_nf' = associated_nf
+}
+
+// Simulate some configuation error
+pred sim_error [r : Request, c : oCloud] {
+
+	r in c.dms.requests and no r.underlying_error//guard
+
+        underlying_error' = underlying_error + r->ERROR
+
+	deployment' = deployment 
+	nodes' = nodes
+	requests' = requests
+	responses' = responses
+	processed' = processed
+	associated_nf' = associated_nf
+}
+
+// allocate required resource
+pred allocate_resource [r : Request, c : oCloud] {
+
+	r in c.dms.requests and r.required_resources != {resource : Resource | resource.associated_nf = r.payload} and no r.underlying_error//guard
+
+	some resource : Resource | (resource in r.required_resources and no resource.associated_nf) and
+		associated_nf' = associated_nf + resource->r.payload
+
+	deployment' = deployment 
+	nodes' = nodes
+	requests' = requests
+	responses' = responses
+	underlying_error' = underlying_error
+	processed' = processed
+
+}
+
+// all resources allocated without failure
+pred success [r: Request, c : oCloud] {
+
+	r in c.dms.requests and r.required_resources = {resource : Resource | resource.associated_nf = r.payload} and no r.underlying_error//guard
+
+	 underlying_error' = underlying_error + r->SUCCESS
+
+	deployment' = deployment 
+	nodes' = nodes
+	requests' = requests
+	responses' = responses
+	processed' = processed
+	associated_nf' = associated_nf
+}
+
+// Assuming no underlying errors occur, finish deployment
+pred finish_deployment [r : Request, c : oCloud] {
+
+	r in c.dms.requests and some r.underlying_error//guard
+
+	(r.underlying_error = SUCCESS) implies (
+		some node : Node | node in c.nodes and deployment' = deployment + node->r.payload and processed' = processed + r->SUCCESS
+	)else(
+		deployment' = deployment and processed' = processed+ r->ERROR
+	)	
+
+	requests' = requests
+	responses' = responses
+	nodes' = nodes
+	underlying_error' = underlying_error
+	associated_nf' = associated_nf
+}
+
+//Send a response to the SMO
+pred response [r : Request, c : oCloud] {
+
+	r in c.dms.requests and r.processed = SUCCESS//guard
+
+	requests' = requests - c.dms->r
+	responses' = responses + SMO->r->r.processed
+	processed' = processed - r->r.processed
+	underlying_error' = underlying_error - r->r.underlying_error
+
+	nodes' = nodes
+	deployment' = deployment 
+	associated_nf' = associated_nf
+	
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+fact act_or_stutter {
+	always (stutter or act)
+}
+
+fact init {
+	all disj a,b :Request | no (a.required_resources + b.required_resources)
+	all c : oCloud | some c.nodes
+	some Request
+	all node : Node | no node.deployment
+	all r : Request |  no r.underlying_error and no r.processed and r.payload not in Node.deployment and some r.required_resources
+	no SMO.responses
+	all d : DMS | no d.requests
+	all r : Resource | no r.associated_nf
+}
+
+fact unique_cloud_properties {
+	all disj a,b : oCloud | a.dms != b.dms
+}
+
+fact link_manageresources_with_correct_cloud {
+	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
+}
+
+// forces system progression
+fact fairness{
+//	eventually (all r : Request | once (before r in DMS.requests and r not in DMS.requests))
+	eventually (all r : Request | some r.processed)
+}
+
+//restrict trace to show that ERROR and request completion are incompatible
+//fact error_prevents_completion{
+//	eventually (some r : Request | ERROR in r.underlying_error and no DMS.requests)
+//}
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Saferty - If a NF enter deployment, there must exist a correspnding success response in the SMO.
+assert added_nf_implies_successful_request {
+	always (all nf : NF | (before nf not in Node.deployment and nf in Node.deployment) implies eventually some r : Request | r.payload = nf and r->SUCCESS in SMO.responses)
+}
+
+// Safety - If a request leaves the DMS, there must be a response in the SMO.
+assert processed_request_implies_response {
+	always (all r : Request | before r in DMS.requests and r not in DMS.requests implies (r->ERROR in SMO.responses or r->SUCCESS in SMO.responses))
+}
+
+// Safety - Receiving a response implies that the corresponding NF is in deployment
+assert response_implies_added_node {
+	always (all r : Request | (r->SUCCESS in SMO.responses) implies (once r.payload not in Node.deployment) and r.payload in Node.deployment)
+}
+
+// Safety - If a request is deemed successful, a response is eventually generated
+assert successful_process_implies_successful_response {
+	always (all r : Request | r.processed = SUCCESS implies eventually r->SUCCESS in SMO.responses)
+}
+
+// Safety - If a Node is not in O-Cloud deployment, then it should never host a workload.
+assert node_not_in_deployment_no_nf {
+	always (all node : Node | node not in oCloud.nodes implies no node.deployment)
+}
+
+// Safety - Never allocated reosoure associated w/ uninstantited NF
+assert allocated_resource_implies_on_going_request_or_completed_request  {
+	always (all r  : Resource | (some nf : NF | r.associated_nf = nf implies 
+		some request : Request | 
+		(request.underlying_error != ERROR) or (nf in Node.deployment)))
+}
+
+// Liveness - Even if an error occurs, a response is eventually sent to the SMO, if not, we have proven that error idles the system.
+assert deployment_implies_error_message {
+	always (all r : Request | r.underlying_error = ERROR implies eventually (r->ERROR in SMO.responses or r->SUCCESS in SMO.responses))
+}
+
+// Liveness - show that error is propagated back to SMO
+assert failure_never_in_SMO_responses {
+	always (all r : Request | r->ERROR not in SMO.responses)
+}
+
+//liveness - we want to show a trace in which an NF that has failed in one request, can be deployed later.
+assert unsuccessful_deployment_implies_never_deployed {
+	always (all nf : NF | once (some r : Request | r.payload = nf and r.processed = ERROR) implies nf not in Node.deployment)
+}
+
+// Liveness - As the sequence describes no exceptions, we can assume that sent requests imply eventual success, we should hopefully show that error notif is sent to SMO
+assert preconditions_imply_success {
+	always (all r : Request | r in DMS.requests implies eventually r->SUCCESS in SMO.responses)
+}
+
+// Liveness - Failure never observed in SMO response inbox, we should hopefully show that error notif is sent to SMO
+assert no_failure_responses {
+	always (all r : Request | r->ERROR not in SMO.responses)
+}
+
+//liveness - we want to show the possibility that an NF can be deployed twice - that is if two requests hold the same NF, then both requests can generate SMO responses
+assert NF_deployed_twice_allowed {
+	always (all disj a,b : Request | a.payload = b.payload => eventually lone {r : Request | r in (a+b) and (r->SUCCESS in SMO.responses)})
+}
+
+//liveness - we want to show that a single NF can be deployed among multiple worker Nodes, (Shows capability of nodes sharing workloads)
+assert NF_not_in_two_locations {
+	always all disj a,b : Node | no (a.deployment & b.deployment)
+}
+
+//liveness	 - we want to show that a single Node can host multiple NFs
+assert hardware_can_host_multiple_NFs {
+	always (all node : Node | lone {nf : NF | nf in node.deployment})
+}
+
+//liveness - we want to show that failed requests eventually leave
+assert error_request_never_leaves {
+	always (all r : Request | before (r.processed = ERROR and r in DMS.requests) implies (r in DMS.requests))
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	
+//run {} for 3
+
+check allocated_resource_implies_on_going_request_or_completed_request for 3 but exactly 1 Node, exactly 1 NF, exactly 1 oCloud, exactly 1 Resource
+//check no_failure_responses for 3
+//check preconditions_imply_success for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node
+//check request_always_has_valid_cloud  for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Resource
+//check added_node_implies_successful_request for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check processed_request_implies_response for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check all_sent_response_eventually_processed for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check response_implies_added_node for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, 20 steps
+//check deployment_implies_error_message for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, 20 steps
+//check unsuccessful_deployment_implies_never_deployed for 3 but 20 steps
+//check failure_never_in_SMO_responses for 3 but 20 steps
+//check error_request_never_leaves for 3 but 20 steps
+//check request_complete_equiv_nf_in_deployment for 3 but 20 steps
+//check NF_deployed_twice_allowed for 3 but 20 steps
+//check NF_not_in_two_locations for 3 but exactly 1 oCloud, exactly 1 NF, exactly 2 Request, exactly 2 Node, 20 steps
+//check successful_process_implies_successful_response for 3 but exactly 1 oCloud, exactly 3 NF, exactly 3 Request, exactly 3 Node, 20 steps
+//check hardware_can_host_multiple_NFs for 3 but exactly 1 Node, exactly 2 NF, exactly 2 Request, exactly 1 oCloud
+//check node_not_in_deployment_no_nf for 3
+
+
+run {} for 3 but exactly 1 oCloud, exactly 3 NF, exactly 2 Request, exactly 3 Node, 20 steps
+
+
+
