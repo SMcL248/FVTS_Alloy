@@ -31,6 +31,9 @@ enum Response {
 	ERROR
 }
 
+one sig SMO {
+	var response : set Request->Response
+}
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -41,6 +44,7 @@ pred stutter {
 	inbox' = inbox
 	status' = status
 	clusterId' = clusterId
+	response' = response
 }
 
 pred act {
@@ -49,7 +53,7 @@ pred act {
 
 pred send_request [r : Request, c : oCloud] {
 
-	historically r not in c.ims.inbox//guard
+	historically r not in c.ims.inbox //guard
 
 	inbox' = inbox + c.ims->r
 
@@ -58,6 +62,7 @@ pred send_request [r : Request, c : oCloud] {
 	booked' = booked
 	status' = status
 	clusterId' = clusterId
+	response' = response
 
 }
 
@@ -82,7 +87,7 @@ pred process_request [r : Request, c : oCloud] {
 	)
 
 	inbox' = inbox
-
+	response' = response
 
 }
 
@@ -90,8 +95,8 @@ pred evaluate [r : Request, c : oCloud] {
 	
 	r in c.ims.inbox and (r.status = SUCCESS or r.status = ERROR)//guard
 
+	response' = response + SMO->r->r.status
 	status' = status - r->r.status + r->STALE
-
 	inbox' = inbox - c.ims->r
 
 	clusters' = clusters
@@ -131,11 +136,11 @@ fact init {
 	Cluster.resources = Resource
 	all r : Request | r.status = STALE
 	some oCloud.clusters
+	no SMO.response
 }
 
-
-fact test {
-	eventually (all r : Request | r.status = SUCCESS or r.status )
+fact fairness {
+	all r : Request | eventually (before r in IMS.inbox and r not in IMS.inbox)
 }
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -144,28 +149,60 @@ assert cluster_is_removed_due_to_successful_request {
 	always (all cl : Cluster | (some c : oCloud | before cl in c.clusters and cl not in c.clusters implies (some r : Request | r.status = SUCCESS and (before r.id = cl.clusterId) and r in c.ims.inbox)))
 }
 
-//Deletion of a cluster implies cluster ID removed, all resources unprovisioned, and all resources unbooked
+// Safety - Deletion of a cluster implies cluster ID removed, all resources unprovisioned, and all resources unbooked
 assert deletion_cleans_resources {
 	always (all cl : Cluster | before cl in oCloud.clusters and cl not in oCloud.clusters implies no cl.resources and no cl.clusterId and (all r : Resource | (before r in cl.resources) implies no r.booked))
 }
 
-//The following are equivalent statements: Clutser has ID and a clutser is active
+// Safety - The following are equivalent statements: Clutser has ID and a clutser is active
 assert active_cluster_implies_id {
 	always (all cl : Cluster | cl in oCloud.clusters <=> some cl.clusterId )
 }
 
-// Clusters never share resources. If a cluster is active, it must have some provisioned resource
+// Safety - Clusters never share resources. If a cluster is active, it must have some provisioned resource
 assert disjointness_and_non_empty {
 	always (all disj a,b : Cluster | no (a.resources & b.resources) and all c : Cluster | c in oCloud.clusters implies some c.resources) 
 }
 
+assert request_success_implies_cleaning {
+	always (all r : Request | r.status = SUCCESS implies eventually r.id not in Resource.booked and r.id not in Cluster.clusterId)
+}
 
+
+assert malformed_impies_error {
+	always (all r : Request, c : oCloud | r in c.ims.inbox and r.status = STALE and no {cl : Cluster | cl in c.clusters and cl.clusterId = r.id} implies eventually r.status = ERROR)
+}
+
+//Safety
+assert cleaned_resoures_implies_deletion {
+	always (all re : Resource, c : oCloud | (some re.booked and after no re.booked) and re in c.inventory implies some {r : Request | r in c.ims.inbox and r.id = re.booked and after r.status = SUCCESS})
+}
+
+// liveness
+assert success {
+	always (all r: Request | r->SUCCESS not in SMO.response)
+}
+
+//liveness
+assert failure {
+	always (all r : Request | r->ERROR not in SMO.response)
+}
+
+//safety
+assert success_implies_active_cluster {
+	always (all r : Request, c : oCloud | r.status = SUCCESS and r in c.ims.inbox implies no {cl : Cluster | cl.clusterId = r.id and cl in c.clusters})
+}
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
+//check cleaned_resoures_implies_deletion	
+//check malformed_impies_error 	for 3 but exactly 1 oCloud, exactly 1 Resource, exactly 1 Cluster, exactly 1 Request, exactly 1 ID, 20 steps
+//check request_success_implies_cleaning for 3 but exactly 1 oCloud, exactly 1 Resource, exactly 1 Cluster, exactly 1 Request, exactly 1 ID, 20 steps
 //check cluster_is_removed_due_to_successful_request for 3 but exactly 2 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
 //check deletion_cleans_resources for 3 but exactly 2 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
 //check active_cluster_implies_id for 3 but exactly 2 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
-//check disjointness_and_non_empty for 3 but exactly 2 oCloud, exactly 2 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
+//check success_implies_active_cluster
+//check failure
+//check success
+check disjointness_and_non_empty
 
 run {} for 3 but exactly 2 oCloud, exactly 4 Resource, exactly 3 Cluster, exactly 4 Request, exactly 3 ID, 20 steps
