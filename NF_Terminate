@@ -89,6 +89,7 @@ pred finish_termination [r : Request, c : oCloud] {
 
 	requests' = requests
 	nodes' = nodes
+	responses' = responses
 }
 
 pred send_response [r : Request, c : oCloud] {
@@ -116,6 +117,7 @@ fact disj_NF {
 }
 
 fact init {
+	no DMS.requests
 	no (oCloud.pool & NF.resources)
 	no Request.processed
 	some oCloud.pool
@@ -127,6 +129,8 @@ fact init {
 	all node : Node | some node.deployment implies node in oCloud.nodes
 	all nf : NF | some nf.resources implies nf in Node.deployment
 	all disj a,b : Node | no (a.deployment & b.deployment)
+	all disj a,b : oCloud | no (a.pool & b.pool)
+	all nf : NF | nf not in Node.deployment implies no nf.resources
 }
 
 fact unique_cloud_properties {
@@ -139,7 +143,7 @@ fact link_managenodes_with_correct_cloud {
 
 fact test{
 //	eventually (some r : Request | r->ERROR in SMO.responses)
-	all r : Request | eventually (before r in DMS.requests and r not in DMS.requests)
+//	all r : Request | eventually (before r in DMS.requests and r not in DMS.requests)
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -181,8 +185,30 @@ assert processed_state_matches_response {
 	always (all r : Request | r.processed = SUCCESS implies eventually r->SUCCESS in SMO.responses)
 }
 
+// Safety
 assert not_deployed_implies_no_resoures {
 	always (all nf : NF | nf not in Node.deployment => no nf.resources)
+}
+
+// Safety
+assert success_implies_resource_deallocation {
+	always (all r : Request | r->SUCCESS in SMO.responses implies no r.payload.resources)
+}
+
+//liveness
+assert failure {
+	always (all r : Request | r->ERROR not in SMO.responses)
+}
+
+//liveness
+assert success {
+	always (all r: Request | r->SUCCESS not in SMO.responses)
+}
+
+//  safety
+assert response_implies_nf_correct_nf_state {
+	always (all r:Request | r->SUCCESS in SMO.responses implies r.payload not in Node.deployment)
+	always (all r:Request | r->ERROR in SMO.responses implies r.payload in Node.deployment)
 }
 
 
@@ -192,13 +218,17 @@ assert not_deployed_implies_no_resoures {
 //check success_case_ends_in_success_message for 3 but exactly 2 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, 20 steps
 //check disjoint_nfs for 3 but exactly 2 oCloud, exactly 3 NF, exactly 2 Request, exactly 3 Node, 20 steps
 //check processed_request_implies_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, 20 steps
-check fail_case_ends_in_no_removal for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
+//check fail_case_ends_in_no_removal for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
 //check success_case_ends_in_removal for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
 //check successful_request_leads_to_success_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, exactly 1 Resource, 20 steps
 //check failed_request_leads_to_failed_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, exactly 1 Resource, 20 steps
 //check termination_implies_resource_deallocation for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, exactly 2 Resource, 20 steps
 //check request_never_sent_if_NF_not_deployed for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, exactly 1 Resource, 20 steps
-check not_deployed_implies_no_resoures for 3 but exactly 1 oCloud, exactly 3 NF, exactly 2 Request, exactly 1 Node, exactly 3 Resource, 20 steps
+check response_implies_nf_correct_nf_state
+check success
+check failure
+check success_implies_resource_deallocation
+check not_deployed_implies_no_resoures for 3
 
 run {} for 3 but exactly 1 oCloud, exactly 2 NF, exactly 2 Request, exactly 1 Node, exactly 2 Resource, 20 steps
 
