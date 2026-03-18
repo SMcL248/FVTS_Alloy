@@ -110,58 +110,63 @@ fact link_managers_with_correct_cloud {
 	all i : IMS, c : oCloud | i.cloud = c <=> c.ims = i
 }
 
-// liveness condition - should return no valid trace. That is, no Node that has failed to boot exists in Deployed nodes.
-fact error_in_deployment {
-//	eventually (some n : oCloudNode, c : oCloud | FAILED in n.boot and (before n->c in c.ims.config_request and n->c not in c.ims.config_request))//failure and request completion
-}
-
 fact fairness {
 	eventually(all n : oCloudNode | once (some o: oCloud | (before n->o in IMS.config_request and n->o not in IMS.config_request)))
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-//Liveness (Violated) - should produce counter-example showing system progression, doesn't
+// (1) Liveness (Violated) - we expect a counter-example showing that boot failure does not prevent the scale request from completing.
+// No counterexample given => liveness property unsatisfied.
 assert error_prevents_completion {
 	always (all n : oCloudNode | (some ims : IMS, c : oCloud | (FAILED in n.boot) implies (n->c in ims.config_request))) //failed boot never allows request to complete
 }
 
-//Liveness (Violated) (with fairness) - no counter example, that is, restricting trace such that all requests complete, means no error can occur.
+// (2) Liveness (Violated) (with fairness) - no counter example, that is, restricting trace such that all requests complete, means no error can occur.
+// Ensure that 'fairness' fact is active. This forces all sent requests to eventually complete.
+// We want to show that there exists a trace in which one of the completed requests corresponds with a failed scale, i.e. failure does not impede request completion.
+// As this produces no counterexample, there exists no trace in which a failed request leaves the IMS config inbox. => liveness property not satisfied.
 assert failure {
 	always (all node : oCloudNode | FAILED not in node.boot)
 }
 
-// Liveness (Validated) - aims to show that multiple nodes can be scaled into a O-Cloud instance.
+// (3) Liveness (Violated) - should return a counterexample. That is, no Node that has failed to boot exists in Deployed nodes.
+// (uncomment to enforce)
+fact error_in_deployment {
+//	eventually (some n : oCloudNode, c : oCloud | FAILED in n.boot and (before n->c in c.ims.config_request and n->c not in c.ims.config_request))//failure and request completion
+}
+
+// (4) Liveness (Satisfied) - we expect counter example where more than one Node exists in an O-Cloud.
 assert multiple_nodes {
 	always (all o : oCloud | lone {node : oCloudNode | node in o.nodes})
 }
 
-// Liveness (Validated) - aims to show that Nodes may be shared across O-Cloud instances.
+// (5) Liveness (Satisfied) -  we expect counter example where a Node is shared across multiple O-Cloud instances.
 assert shared_nodes {
 	always (all disj a,b : oCloud | no (a.nodes & b.nodes))
 }
 
-// Safety (Validated) - Node only boots due to on-going hardware scale attempt
+// (6) Safety (Validated) - Node only boots due to on-going hardware scale attempt
 assert boot_implies_request {
 	always (all node : oCloudNode | (before no node.boot and some node.boot) implies some c : oCloud | node->c in c.ims.config_request)
 }
 
-// Safety (Validated) - Node in deployment implies successful boot
+// (7) Safety (Validated) - Node in deployment implies successful boot
 assert deployment_implies_success_boot {
 	always (all n : oCloudNode | (n in oCloud.nodes) implies (SUCCESS in n.boot))
 }
 
-// Safety (Validated) - with fairness, successful boot implies eventual deployment
+// (8) Safety (Validated) - with fairness, successful boot implies eventual deployment
 assert success_boot_implies_node_deployment {
 	always (all n : oCloudNode | (n.boot = SUCCESS) implies eventually n in oCloud.nodes)
 }
 
-// Safety (Validated) - If a configuration request is complete, the node must be in deployment.
+// (9) Safety (Validated) - If a configuration request is complete, the node must be in deployment.
 assert process_request_implies_deployment {
 	always(all node : oCloudNode, c :oCloud | (before node->c in c.ims.config_request and node->c not in c.ims.config_request) implies node in c.nodes) // request procssed => node in deployment
 }
 
-// Safey (Validated) - If IMS recieves config request, such a config plan must exist in the installer operator
+// (10) Safey (Validated) - If IMS recieves config request, such a config plan must exist in the installer operator
 assert ims_request_implies_operator_request {
 	always (all node : oCloudNode, c : oCloud | node->c in IMS.config_request implies node->c in CloudInstaller.inbox)
 }
