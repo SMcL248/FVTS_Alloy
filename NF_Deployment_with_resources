@@ -187,79 +187,79 @@ fact fairness{
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-// Saferty - If a NF enter deployment, there must exist a correspnding success response in the SMO.
+// (1) Safety - If a NF enter deployment, there must exist a correspnding success response in the SMO.
 assert added_nf_implies_successful_request {
 	always (all nf : NF | (before nf not in Node.deployment and nf in Node.deployment) implies eventually some r : Request | r.payload = nf and r->SUCCESS in SMO.responses)
 }
 
-// Safety - If a request leaves the DMS, there must be a response in the SMO.
+// (2) Safety - If a request leaves the DMS, there must be a response in the SMO.
 assert processed_request_implies_response {
 	always (all r : Request | before r in DMS.requests and r not in DMS.requests implies (r->ERROR in SMO.responses or r->SUCCESS in SMO.responses))
 }
 
-// Safety - Receiving a response implies that the corresponding NF is in deployment
+// (3) Safety - Receiving a success response implies that the corresponding NF is in deployment
 assert response_implies_added_node {
 	always (all r : Request | (r->SUCCESS in SMO.responses) implies (once r.payload not in Node.deployment) and r.payload in Node.deployment)
 }
 
-// Safety - If a request is deemed successful, a response is eventually generated
+// (4) Safety - If a request is deemed successful, a response is eventually generated
 assert successful_process_implies_successful_response {
 	always (all r : Request | r.processed = SUCCESS implies eventually r->SUCCESS in SMO.responses)
 }
 
-// Safety - If a Node is not in O-Cloud deployment, then it should never host a workload.
+// (5) Safety - If a Node is not in O-Cloud deployment, then it should never host a workload.
 assert node_not_in_deployment_no_nf {
 	always (all node : Node | node not in oCloud.nodes implies no node.deployment)
 }
 
-// Safety - Never allocated reosoure associated w/ uninstantited NF
+// (6) Safety - Never allocated reosoure associated w/ uninstantited NF
 assert allocated_resource_implies_on_going_request_or_completed_request  {
 	always (all r  : Resource | (some nf : NF | r.associated_nf = nf implies 
 		some request : Request | 
 		(request.underlying_error != ERROR) or (nf in Node.deployment)))
 }
 
-// Liveness - Even if an error occurs, a response is eventually sent to the SMO, if not, we have proven that error idles the system.
+// (7) Liveness - Even if an error occurs, a response is eventually sent to the SMO, if not, we have proven that error idles the system.
 assert deployment_implies_error_message {
 	always (all r : Request | r.underlying_error = ERROR implies eventually (r->ERROR in SMO.responses or r->SUCCESS in SMO.responses))
 }
 
-// Liveness - show that error is propagated back to SMO
+// (8) Liveness - show that error is propagated back to SMO
 assert failure_never_in_SMO_responses {
 	always (all r : Request | r->ERROR not in SMO.responses)
 }
 
-//liveness - we want to show a trace in which an NF that has failed in one request, can be deployed later.
+// (9) Liveness - we want to show a trace in which an NF that has failed in one request, can be deployed later.
 assert unsuccessful_deployment_implies_never_deployed {
 	always (all nf : NF | once (some r : Request | r.payload = nf and r.processed = ERROR) implies nf not in Node.deployment)
 }
 
-// Liveness - As the sequence describes no exceptions, we can assume that sent requests imply eventual success, we should hopefully show that error notif is sent to SMO
+// (10) Liveness - As the sequence describes no exceptions, we can assume that sent requests imply eventual success, we should hopefully show that error notif is sent to SMO
 assert preconditions_imply_success {
 	always (all r : Request | r in DMS.requests implies eventually r->SUCCESS in SMO.responses)
 }
 
-// Liveness - Failure never observed in SMO response inbox, we should hopefully show that error notif is sent to SMO
+// (11) Liveness - Failure never observed in SMO response inbox, we should hopefully show that error notif is sent to SMO
 assert no_failure_responses {
 	always (all r : Request | r->ERROR not in SMO.responses)
 }
 
-//liveness - we want to show the possibility that an NF can be deployed twice - that is if two requests hold the same NF, then both requests can generate SMO responses
+// (12) Liveness - we want to show the possibility that an NF can be deployed twice - that is if two requests hold the same NF, then both requests can generate SMO responses
 assert NF_deployed_twice_allowed {
 	always (all disj a,b : Request | a.payload = b.payload => eventually lone {r : Request | r in (a+b) and (r->SUCCESS in SMO.responses)})
 }
 
-//liveness - we want to show that a single NF can be deployed among multiple worker Nodes, (Shows capability of nodes sharing workloads)
+// (13) Liveness - we want to show that a single NF can be deployed among multiple worker Nodes, (Shows capability of nodes sharing workloads)
 assert NF_not_in_two_locations {
 	always all disj a,b : Node | no (a.deployment & b.deployment)
 }
 
-//liveness	 - we want to show that a single Node can host multiple NFs
+// (14) Liveness	 - we want to show that a single Node can host multiple NFs
 assert hardware_can_host_multiple_NFs {
 	always (all node : Node | lone {nf : NF | nf in node.deployment})
 }
 
-//liveness - we want to show that failed requests eventually leave
+// (15) Liveness - we want to show that failed requests eventually leave
 assert error_request_never_leaves {
 	always (all r : Request | before (r.processed = ERROR and r in DMS.requests) implies (r in DMS.requests))
 }
