@@ -183,48 +183,48 @@ fact error_allows_progression {
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-// (Safety) Processed Requets imply present response
+// (1) (Safety) Processed Requets imply present response
 assert processed_request_yields_response {
 	always (all r : Request | (before r in DMS.requests and r not in DMS.requests) implies (r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox))
 }
 
-// (Safety) - If a resource is deallocated from a NF, then there should have existed a successful scale in request which targeted that NF
+// (2) (Safety) - If a resource is deallocated from a NF, then there should have existed a successful scale in request which targeted that NF
 assert resource_scale_out {
 		always (all r : Resource | (some nf : NF | r in nf.resources and r not in nf .resources implies once some re : Request | nf in re.payload and re.status = OK and re.operation = IN))
 }
 
-// (Liveness) - if a resource is shared, successful scale in still possib
-assert success_is_impossible {
-	always(all r : Request | r.operation = IN implies r.status != OK )
-}
-
-// (Liveness) Under the assumption that an allocated resource cannot be allocated to another NF Deployment
-assert disjoint_resources {
-	always (all disj a,b : NF | no (a.resources & b.resources))
-}
-
-// (Liveness) we would expect that a deallocated node should be able to be reallocated later.
-assert deallocateed_never_reallocated {
-	always (all r : Resource | once (before r in NF.resources and r not in NF.resources) implies (r in oCloud.pool))
-}
-
-// (liveness) - NF should be able to utilise mulitple resources.
-assert multiple_resources {
-	always (all nf : NF | lone {r : Resource | r in nf.resources})
-}
-
-// (Safety) - If a resource is in use, then there should have been a successful scale out request targeting this NF.
+// (3) (Safety) - If a resource is in use, then there should have been a successful scale out request targeting this NF.
 assert scaling_implies_request {
 	always (all r : Resource | (some nf : NF | r in nf.resources implies once some re : Request | nf in re.payload and OK in re.status and OUT in re.operation))
 }
 
-// (Safety) Clearing of request status => SMO response
+// (4) (Safety) Clearing of request status => SMO response
 assert correct_responses {
 	always (all r : Request | ((before ERROR in r.status and ERROR not in r.status) implies r->ERROR in SMO.response_inbox) and 
 		  ((before OK in r.status and OK not in r.status) implies r->OK in SMO.response_inbox))
 }
 
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// (5) (Liveness) 
+assert success_is_impossible {
+	always(all r : Request | r.operation = IN implies r.status != OK )
+}
+
+// (6) (Liveness) Under the assumption that an allocated resource cannot be allocated to another NF Deployment
+assert disjoint_resources {
+	always (all disj a,b : NF | no (a.resources & b.resources))
+}
+
+// (7) (Liveness) we would expect that a deallocated node should be able to be reallocated later.
+assert deallocateed_never_reallocated {
+	always (all r : Resource | once (before r in NF.resources and r not in NF.resources) implies (r in oCloud.pool))
+}
+
+// (8) (Liveness) - NF should be able to utilise mulitple resources.
+assert multiple_resources {
+	always (all nf : NF | lone {r : Resource | r in nf.resources})
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 
 //check success_is_impossible for 3 but exactly 1 oCloud, exactly 1 Resource
 //check resource_scale_out for 3 but 20 steps
