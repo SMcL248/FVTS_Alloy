@@ -203,66 +203,67 @@ fact link_managers_with_correct_cloud {
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-//safety
+// (1) safety
 assert update_request_processed_implies_termination {
 	always (all r : UpdateRequest | (before r in SMO.update_request and r not in SMO.update_request) implies some re : Request | re in DMS.requests and (re.payload = r.existing or re.payload = r.desired) and re.operation = DELETE)
 }
 
-//safety
+// (2) safety
 assert requests_sent_to_the_correct_place {
 	always (all r : Request | r in r.target.dms.requests and r.operation = DELETE implies r.payload in r.target.nodes.deployment)
 	always (all r : Request | r in r.target.dms.requests and r.operation = ADD implies r.payload not in r.target.nodes.deployment)
 }
 
-//safety
+// (3) safety
 assert process_requests_imply_response {
 	always (all r : Request | (before r in DMS.requests and r not in DMS.requests) implies (r->OK in SMO.response_inbox or r->ERROR in SMO.response_inbox))
 }
 
-//safety
+// (4) safety
 assert only_one_NF_remains {
 	always (all r : UpdateRequest | (once r.desired in oCloudNode.deployment and r.desired not in oCloudNode.deployment and r.existing in oCloudNode.deployment) implies once r.status = ERROR)
 	always (all r : UpdateRequest | (r.existing not in oCloudNode.deployment and r.desired in oCloudNode.deployment) implies once r.status = OK)
 }
 
-//safety
+// (5) safety
 assert update_idea_implies_conditions_for_update {
 	always (all r : UpdateRequest | (before r not in SMO.update_request and r in SMO.update_request) implies r.desired not in oCloudNode.deployment and r.existing in oCloudNode.deployment)
 }	
 
-//safety
+// (6) safety
 assert terminated_NF_imply_deallocated_resources {
 	always (all nf : NF | (before nf in oCloudNode.deployment and nf not in oCloudNode.deployment) implies no nf.resources and {resource : Resource| before resource in nf.resources} in oCloud.pool)
 }
 
-//liveness
-assert success {
-	always (all ur : UpdateRequest | ur.status != OK)
-}
-
-//liveness
-assert failure {
-	always (all ur : UpdateRequest | ur.status != ERROR)	
-}
-
-//liveness
-assert desired_and_exisitng_on_same_node {
-	always (all disj a,b : NF | some ur : UpdateRequest | a in ur.desired and b in ur.existing and (a+b) in oCloudNode.deployment implies some node : oCloudNode | a in node.deployment and b in node.deployment)
-}
-
-// safety
+// (7) safety
 assert desired_and_exisiting_same_oCloud {
 	always (all ur : UpdateRequest | (ur.desired + ur.existing) in oCloudNode.deployment implies some c :oCloud | (ur.desired + ur.existing) in c.nodes.deployment)
 }
 
-// safety
+// (8) safety
 assert responses_imply_corresponding_action {
 	always (all r : Request | r->OK in SMO.response_inbox and r.operation = ADD implies once(r.payload in oCloudNode.deployment))
 	always (all r : Request | r->OK in SMO.response_inbox and r.operation = DELETE implies once(r.payload not in oCloudNode.deployment))
 }
 
+// (9) safety
 assert update_request_status_implies_both_deployed {
 	always (all ur : UpdateRequest | some ur.status implies (ur.desired + ur.existing) in oCloudNode.deployment)
+}
+
+// (10) liveness
+assert success {
+	always (all ur : UpdateRequest | ur.status != OK)
+}
+
+// (11) liveness
+assert failure {
+	always (all ur : UpdateRequest | ur.status != ERROR)	
+}
+
+// (12) liveness
+assert desired_and_exisitng_on_same_node {
+	always (all disj a,b : NF | some ur : UpdateRequest | a in ur.desired and b in ur.existing and (a+b) in oCloudNode.deployment implies some node : oCloudNode | a in node.deployment and b in node.deployment)
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
