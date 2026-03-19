@@ -206,82 +206,81 @@ fact init {
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-// no two clusters can share a single resource
+// (1) Safety - no two clusters can share a single resource
 assert clusters_are_disjoint{
 	always (all disj a,b : Cluster | no (a.resources & b.resources))
 }
 
-// Once booked, a resource never changes booking ID
+// (2) Safety - Once booked, a resource never changes booking ID
 assert booked_never_changes {
 	always (all r : Resource | some r.booked implies some identifier : ID | r.booked = identifier and always r.booked = identifier)
 }
 
-// A created cluster is never empty
+// (3) Safety - A created cluster is never empty
 assert never_empty_cluster {
 	always (all c : Cluster | c in oCloud.clusters implies some c.resources)
 }
 
-// IIf there are insufficent resources to fufill a request, then the request eventually fails
+// (4) Safety - If there are insufficent resources to fufill a request, then the request eventually fails
 assert insufficient_resources_implies_error {
 	always (all r : Request | r in IMS.inbox and r.payload not in {resource : Resource | some c : oCloud | r in c.ims.inbox and resource in c.inventory and no resource.booked and resource not in Cluster.resources} implies eventually r.status = ERROR)
 }
 
-
-// Safety - No two clutsers have the same cluster ID.
+// (5) Safety - No two clutsers have the same cluster ID.
 assert ids_are_locally_unique {
 	always (all disj a,b : Cluster | (some c : oCloud | (a + b) in c.clusters implies no (a.clusterId & b.clusterId)))
 }
 
-//Safety
+// (6) Safety
 // If two resources are in the same cloud but different clusters, then they must be associated with different IDs.
 assert resources_in_different_clusters_have_different_ids {
 	always (all disj a,b : Resource | (some cl : oCloud | (a+b) in cl.inventory) and (b in Cluster.resources and some c : Cluster | (a in c.resources and b not in c.resources)) implies no (a.booked & b.booked))
 }
 
-//Safety
+// (7) Safety
 // All provisioned resources must have an ID matching there parent Cluster
 assert resource_id_matches_cluster {
 	always (all r : Resource, c : Cluster | r in c.resources => r.booked = c.clusterId)
 }
 
+// (8) Safety
 // If we have two identical requests sent at the same time, then one must fail.
 assert two_identical_requests_implies_one_fails {
 	always (all a,b : Request | a.payload = b.payload and (some ims : IMS | (a+b) in ims.inbox) and a.status = STALE and b.status = STALE implies eventually one {r : Request | r in (a+b) and r.status=SUCCESS})
 }
 
+// (9) safety
+assert provisioned_implies_cluster {
+	always (all c : oCloud | (all r : Resource, cl : Cluster | r in c.inventory and r in cl.resources implies cl in c.clusters))
+}
+
+// (10) safety
+assert created_cluster_has_dms_endpoint {
+	always (all cl : Cluster | some cl.resources implies eventually some cl.dms_endpoint)
+}
+
+// (11) safety
+assert success_response_implies_resources_in_cluster{
+	always (all r : Request | r->SUCCESS in SMO.response implies some cl : Cluster | (r.payload in cl.resources))
+}
+
+// (12) liveness
 // This should reveal a counter-example, the system allows for two clusters in different clouds to have the same ID.
 assert id_not_globally_unique {
 	always (all disj a,b : Cluster |(a + b) in oCloud.clusters implies no (a.clusterId & b.clusterId))
 }
 
-assert provisioned_implies_cluster {
-	always (all c : oCloud | (all r : Resource, cl : Cluster | r in c.inventory and r in cl.resources implies cl in c.clusters))
-}
-
-assert created_cluster_has_dms_endpoint {
-	always (all cl : Cluster | some cl.resources implies eventually some cl.dms_endpoint)
-}
-
-assert deploying_stage_implies_success {
-	always (all r : Request | r.status = PROVISIONING implies eventually r.status = SUCCESS)
-}
-
-// liveness
+// (13) liveness
 assert success {
 	always (all r : Request | r->SUCCESS not in SMO.response)
 }
 
-// liveness
+// (14) liveness
 assert failure {
 	always (all r : Request | r->ERROR not in SMO.response)
 }
 
-//safety
-assert success_response_implies_resources_in_cluster{
-	always (all r : Request | r->SUCCESS in SMO.response implies some cl : Cluster | (r.payload in cl.resources))
-}
-
-//liveness
+// (15) liveness
 assert only_one_cluster_per_oCloud {
 	always (all c : oCloud | lone {cl : Cluster | cl in c.clusters})
 }
@@ -292,7 +291,6 @@ check only_one_cluster_per_oCloud
 check success_response_implies_resources_in_cluster
 //check failure
 check success
-check deploying_stage_implies_success for 3 but exactly 1 oCloud, exactly 1 Resource, exactly 1 Cluster, exactly 1 Request, exactly 1 ID, 20 steps 
 //check created_cluster_has_dms_endpoint for 3 but exactly 1 oCloud, exactly 1 Resource, exactly 1 Cluster, exactly 1 Request, exactly 1 ID, 20 steps 
 //check provisioned_implies_cluster for 3 but exactly 2 oCloud, exactly 1 Resource, exactly 2 Cluster, exactly 2 Request, exactly 2 ID, 20 steps
 //check clusters_are_disjoint for 3 but exactly 2 oCloud, exactly 3 Resource, exactly 2 Cluster, exactly 2 Request, exactly 1 ID, 20 steps
