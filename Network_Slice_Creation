@@ -175,42 +175,42 @@ fact temp {
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-// Safety
+// (1) Safety
 assert failure_implies_clean {
 	always (all s : Slice | s->ERROR in SMO.response implies no s.ids)
 }
 
-// Safety
-assert availbe_and_used_disjoint {
+// (2) Safety
+assert available_and_used_disjoint {
 	always (all c : oCloud, s : Slice | no c.available & {id : VLAN_ID | c->id in s.ids and id in c.deployed.trunk})
 }
 
-// Safety
+// (3) Safety
 assert success_implies_deployment {
 	always (all s : Slice | once (s->OK in SMO.response) implies s.nfs in oCloud.deployed)
 }
 
-//liveness
-assert id_availabe_but_also_applied {
+// (4) Liveness
+assert id_available_but_also_applied {
 	always (all c : oCloud | no (c.available & c.deployed.trunk))
 }
 
-// livness - success can happen
+// (5) livness - success can happen
 assert success{
 	always (all s : Slice | s->OK not in SMO.response)
 }
 
-//liveness - failure may occur
+// (6) liveness - failure may occur
 assert failure {
 	always (all s : Slice | s->ERROR not in SMO.response)
 }
 
-//liveness
+// (7) liveness
 assert failure_may_have_NF_instatitated {
 	always (all s : Slice | s->ERROR in SMO.response implies all nf : NF | nf in s.nfs and nf not in oCloud.deployed)
 }
 
-//liveness
+// (8) liveness
 assert multiple_clouds {
 	always (all disj a,b : NF | some s : Slice | a in s.nfs and b in s.nfs and s->OK in SMO.response implies some c : oCloud | a in c.deployed and b in c.deployed)
 }
@@ -220,7 +220,7 @@ assert multiple_clouds {
 //check multiple_clouds for 3 but exactly 2 oCloud
 //check success_implies_deployment for 3
 //check test for 3
-//check id_availabe_but_also_applied for 3 but exactly 1 VLAN_ID, exactly 2 oCloud, exactly 1 NF
+//check id_available_but_also_applied for 3 but exactly 1 VLAN_ID, exactly 2 oCloud, exactly 1 NF
 //check failure_may_have_NF_instatitated for 3
 //check failure_implies_clean for 3
 //check failure for 3
