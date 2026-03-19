@@ -155,7 +155,7 @@ fact act_or_stutter {
 }
 
 fact init {
-	all disj a,b :Request | no (a.required_resources + b.required_resources)
+	all disj a,b :Request | no (a.required_resources & b.required_resources)
 	all c : oCloud | some c.nodes
 	some Request
 	all node : Node | no node.deployment
@@ -254,9 +254,14 @@ assert NF_not_in_two_locations {
 	always all disj a,b : Node | no (a.deployment & b.deployment)
 }
 
-// (14) Liveness	 - we want to show that a single Node can host multiple NFs
+// (14) Liveness - we want to show that a single Node can host multiple NFs
 assert hardware_can_host_multiple_NFs {
 	always (all node : Node | lone {nf : NF | nf in node.deployment})
+}
+
+// (14 - alt)(uncomment to enforce liveness proprty)
+fact hardware_can_host_multiple_NFs_fact {
+//	eventually (some node : Node | (some disj a,b : NF | (a+b) in node.deployment))
 }
 
 // (15) Liveness - we want to show that failed requests eventually leave
@@ -287,8 +292,6 @@ check allocated_resource_implies_on_going_request_or_completed_request for 3 but
 //check hardware_can_host_multiple_NFs for 3 but exactly 1 Node, exactly 2 NF, exactly 2 Request, exactly 1 oCloud
 //check node_not_in_deployment_no_nf for 3
 
-
-run {} for 3 but exactly 1 oCloud, exactly 3 NF, exactly 2 Request, exactly 3 Node, 20 steps
 
 
 
