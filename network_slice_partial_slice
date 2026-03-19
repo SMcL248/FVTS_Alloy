@@ -175,44 +175,46 @@ fact init {
 	all id : VLAN_ID, c : oCloud, nf : NF | id in nf.trunk and nf in c.deployed => id not in c.available
 }
 
-fact temp {
+fact fairness {
 //	all s : Slice | eventually (before s in oCloud.requests and s not in oCloud.requests)
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-//Safety - If a slice is deployed, but NF deployments are missing, this must be due to an on-going deletion request
+// (1) Safety - If a slice is deployed, but NF deployments are missing, this must be due to an on-going deletion request
 assert partial_slices {
 	always (all s : Slice | (some c : oCloud, id : VLAN_ID | c->id in s.ids and some {nf : NF | nf in s.nfs and nf not in oCloud.deployed} implies s in c.requests))
 }
 
-// Safety
+// (2) Safety
 assert available_id_implies_no_nf_with_id {
 	always (all id : VLAN_ID | some c : oCloud | id in c.available implies no {nf : NF | nf in c.deployed and id in nf.trunk} )
 }
 
-// livness - success can happen
-assert success{
-	always (all s : Slice | s->OK not in SMO.response)
-}
-
-//livess
-assert failure {
-	always (all s : Slice | s->ERROR not in SMO.response)
-}
-
-
+// (3) safety
 assert delete_request_implies_delete {
 	always (all s : Slice | s in oCloud.requests implies eventually {nf : NF | nf in s.delete} not in oCloud.deployed and {nf : NF | nf in (s.nfs - s.delete)} in oCloud.deployed )
 }
+
+// (4) safety
 assert delete_implies_ID_deallocation {
 	always (all s : Slice | some c : oCloud | s in c.requests implies eventually {id : VLAN_ID | c->id in s.ids} in c.available and {id : VLAN_ID | c->id in s.ids} not in {nf : NF | nf in c.deployed}.trunk)
 }
+
+// (5) safety
 assert request_implies_response{
 	always(all s : Slice | s in oCloud.requests implies eventually s->OK in SMO.response or s->ERROR in SMO.response)
 }
 
+// (6) livness - success can happen
+assert success{
+	always (all s : Slice | s->OK not in SMO.response)
+}
 
+// (7) livenss
+assert failure {
+	always (all s : Slice | s->ERROR not in SMO.response)
+}
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -220,7 +222,6 @@ check partial_slices for 3 but exactly 1 oCloud
 check failure for 3
 check success for 3
 check available_id_implies_no_nf_with_id  for 3
-//
 
 run {} for 3 but exactly 1 Slice
 
