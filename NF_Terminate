@@ -141,82 +141,84 @@ fact link_managenodes_with_correct_cloud {
 	all d : DMS, c : oCloud | d.cloud = c <=> c.dms = d
 }
 
-fact test{
+fact fairness {
 //	eventually (some r : Request | r->ERROR in SMO.responses)
 //	all r : Request | eventually (before r in DMS.requests and r not in DMS.requests)
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+// (1) safety
 assert fail_case_ends_in_error_message {
 	always (all r : Request | (r in r.target.dms.requests and r.processed = ERROR and r.payload not in r.target.nodes.deployment) implies eventually r->ERROR in SMO.responses)
 }
 
+// (2) safety
 assert success_case_ends_in_success_message {
 	always (all r : Request | (r in r.target.dms.requests and r.payload in r.target.nodes.deployment) implies eventually r->SUCCESS in SMO.responses)
 }
 
+// (3) safety
 assert fail_case_ends_in_no_removal {
 	always (all r : Request | (r in r.target.dms.requests and no r.processed and r.payload not in r.target.nodes.deployment) implies eventually r.payload in Node.deployment)
 }
 
+// (4) safety
 assert success_case_ends_in_removal {
 	always (all r : Request | (r in r.target.dms.requests and r.payload in r.target.nodes.deployment) implies eventually r.payload not in Node.deployment)
 }
 
+// (5) safety
 assert processed_request_implies_response {
 	always (some r : Request | before r in DMS.requests and r not in DMS.requests implies eventually r->SUCCESS in SMO.responses or r->ERROR in SMO.responses)
 }
 
-assert disjoint_nfs {
-	always (all disj a,b : Node | no (a.deployment & b.deployment))
-}
-
+// (6) safety
 assert termination_implies_resource_deallocation {
 	always (some r : Request | (r.processed = SUCCESS) => no r.payload.resources and {re : Resource | before re in r.payload.resources} in oCloud.pool)
 }
 
+// (7) safety
 assert request_never_sent_if_NF_not_deployed {
 	always (some r : Request | before r not in DMS.requests and r in DMS.requests implies r.payload in Node.deployment)
 }
 
+// (8) safety
 assert processed_state_matches_response {
 	always (all r : Request | r.processed = ERROR implies eventually r->ERROR in SMO.responses)
 	always (all r : Request | r.processed = SUCCESS implies eventually r->SUCCESS in SMO.responses)
 }
 
-// Safety
+// (9) Safety
 assert not_deployed_implies_no_resoures {
 	always (all nf : NF | nf not in Node.deployment => no nf.resources)
 }
 
-// Safety
+// (10) Safety
 assert success_implies_resource_deallocation {
 	always (all r : Request | r->SUCCESS in SMO.responses implies no r.payload.resources)
 }
 
-//liveness
-assert failure {
-	always (all r : Request | r->ERROR not in SMO.responses)
-}
-
-//liveness
-assert success {
-	always (all r: Request | r->SUCCESS not in SMO.responses)
-}
-
-//  safety
+// (11) safety
 assert response_implies_nf_correct_nf_state {
 	always (all r:Request | r->SUCCESS in SMO.responses implies r.payload not in Node.deployment)
 	always (all r:Request | r->ERROR in SMO.responses implies r.payload in Node.deployment)
 }
 
+// (12) safety 
+assert disjoint_nfs {
+	always (all disj a,b : Node | no (a.deployment & b.deployment))
+}
+
+// (13) liveness
+assert failure {
+	always (all r : Request | r->ERROR not in SMO.responses)
+}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 //check fail_case_ends_in_error_message for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, 20 steps
 //check success_case_ends_in_success_message for 3 but exactly 2 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, 20 steps
-//check disjoint_nfs for 3 but exactly 2 oCloud, exactly 3 NF, exactly 2 Request, exactly 3 Node, 20 steps
 //check processed_request_implies_response for 3 but exactly 2 oCloud, exactly 2 NF, exactly 2 Request, exactly 2 Node, 20 steps
 //check fail_case_ends_in_no_removal for 3 but exactly 1 oCloud, exactly 2 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
 //check success_case_ends_in_removal for 3 but exactly 1 oCloud, exactly 1 NF, exactly 1 Request, exactly 1 Node, exactly 2 Resource, 20 steps
